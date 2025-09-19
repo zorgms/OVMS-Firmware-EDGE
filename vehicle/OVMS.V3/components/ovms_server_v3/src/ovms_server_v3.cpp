@@ -1210,11 +1210,10 @@ void OvmsServerV3::Ticker1(std::string event, void* data)
     if (m_notify_alert_pending) TransmitPendingNotificationsAlert();
     if (m_notify_data_pending && m_notify_data_waitcomp==0)
       TransmitPendingNotificationsData();
-
-    // sendall interval disabled : too much data, only useful for initial sync
-    if (m_lasttx_sendall == 0)
+      
+    if ((m_lasttx_sendall == 0) || (now > (m_lasttx_sendall + m_updatetime_keepalive)))
       {
-      ESP_LOGI(TAG, "Transmit all metrics");
+      //ESP_LOGI(TAG, "Transmit all metrics");
       m_lasttx_sendall = now;
       m_lasttx_priority = now;
       m_lasttx = now;
