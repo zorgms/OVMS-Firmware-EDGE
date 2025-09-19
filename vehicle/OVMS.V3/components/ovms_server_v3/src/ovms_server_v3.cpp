@@ -1031,19 +1031,25 @@ void OvmsServerV3::EventListener(std::string event, void* data)
     {
     ConfigChanged((OvmsConfigParam*) data);
     }
-  if (event == "location.alert.flatbed.moved" || event == "location.alert.valet.bounds" ||    
-      event == "app.connected" || event == "app.disconnected" ||  
+  if (event == "location.alert.flatbed.moved" || event == "location.alert.valet.bounds" ||
       event == "vehicle.charge.start" || event == "vehicle.charge.stop" ||
       event == "vehicle.charge.finished" || event == "vehicle.awake" ||
       event == "vehicle.on" || event == "vehicle.off" ||           
-      event == "vehicle.locked" || event == "vehicle.unlocked" ||
+      event == "vehicle.locked" || event == "vehicle.unlocked")
+    {
+    if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
+    m_lasttx_priority = now;
+    m_lasttx = now;
+    TransmitModifiedMetrics();
+    }
+  if (event == "app.connected" || event == "app.disconnected" ||
       event == "server.v3.connected")
     {
     if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
-
-    //ESP_LOGI(TAG, "Transmit modified metrics by event");
-    TransmitModifiedMetrics();  // Force immediate update on these events
-    m_lasttx = now;             // and reset timer
+    m_lasttx_sendall = now;
+    m_lasttx_priority = now;
+    m_lasttx = now;
+    TransmitAllMetrics();
     }
   }
 
@@ -1056,10 +1062,7 @@ void OvmsServerV3::ConfigChanged(OvmsConfigParam* param)
   m_vehicle_stream = MyConfig.GetParamValueInt("vehicle", "stream", m_vehicle_stream);
   m_updatetime_connected = MyConfig.GetParamValueInt("server.v3", "updatetime.connected", m_updatetime_connected);
   m_updatetime_idle = MyConfig.GetParamValueInt("server.v3", "updatetime.idle", m_updatetime_idle);
-  m_updatetime_awake = MyConfig.GetParamValueInt("server.v3", "updatetime.awake", m_updatetime_awake);
   m_updatetime_on = MyConfig.GetParamValueInt("server.v3", "updatetime.on", m_updatetime_on);
-  m_updatetime_charging = MyConfig.GetParamValueInt("server.v3", "updatetime.charging", m_updatetime_charging);
-  m_updatetime_sendall = MyConfig.GetParamValueInt("server.v3", "updatetime.sendall", m_updatetime_sendall);
   m_updatetime_keepalive = MyConfig.GetParamValueInt("server.v3", "updatetime.keepalive", m_updatetime_keepalive);
   m_legacy_event_topic = MyConfig.GetParamValueBool("server.v3", "events.legacy_topic", true);
   m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
