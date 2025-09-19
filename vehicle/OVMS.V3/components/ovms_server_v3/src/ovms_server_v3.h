@@ -114,7 +114,7 @@ class OvmsServerV3 : public OvmsServer
     int m_updatetime_keepalive;
     bool m_updatetime_priority;
     bool m_legacy_event_topic;
-
+    bool m_updatetime_immediately;
     bool m_connection_available;
     bool m_notify_info_pending;
     bool m_notify_error_pending;
@@ -154,7 +154,9 @@ class OvmsServerV3 : public OvmsServer
   private:
     void TransmitMetric(OvmsMetric* metric);
 
-    IdIncludeExcludeFilter m_metrics_filter;
+    IdIncludeExcludeFilter m_metrics_filter;    // server.v3.include, server.v3.exclude
+    IdIncludeExcludeFilter m_metrics_priority;  // server.v3.priority
+    IdIncludeExcludeFilter m_metrics_immediately;  // server.v3.immediately
   };
 
 class OvmsServerV3Init

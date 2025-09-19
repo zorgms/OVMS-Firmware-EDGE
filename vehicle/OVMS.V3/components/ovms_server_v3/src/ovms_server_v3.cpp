@@ -188,7 +188,7 @@ static void OvmsServerV3MongooseCallback(struct mg_connection *nc, int ev, void 
   }
 
 OvmsServerV3::OvmsServerV3(const char* name)
-  : OvmsServer(name), m_metrics_filter(TAG)
+  : OvmsServer(name), m_metrics_filter(TAG), m_metrics_priority(TAG), m_metrics_immediately(TAG)
   {
   if (MyOvmsServerV3Modifier == 0)
     {
@@ -225,6 +225,7 @@ OvmsServerV3::OvmsServerV3(const char* name)
   m_conn_jitter_max  = 5;       // max random extra seconds
   m_connect_jitter   = -1;      // -1 = not yet chosen
   m_updatetime_priority = false;
+  m_updatetime_immediately = false;
 
   ESP_LOGI(TAG, "OVMS Server v3 running");
 
@@ -459,19 +460,13 @@ void OvmsServerV3::TransmitPriorityMetrics()
 
     // 2) Add configurable extra priority metrics via IdFilter:
     //    Param: server.v3 / metrics.priority
-    std::string extras = MyConfig.GetParamValue("server.v3", "metrics.priority");
-    if (!extras.empty())
-    {
-    IdFilter extrafilter(TAG);
-    extrafilter.LoadFilters(extras); // include-only
 
     for (OvmsMetric* m = MyMetrics.m_first; m; m = m->m_next)
       {
       const std::string mname(m->m_name);
-      if (extrafilter.CheckFilter(mname))
+      if (m_metrics_priority.CheckFilter(mname))
         send_metric_by_name(mname);
       }
-    }
   }
 
 int OvmsServerV3::TransmitNotificationInfo(OvmsNotifyEntry* entry)
@@ -950,6 +945,18 @@ void OvmsServerV3::SetStatus(const char* status, bool fault /*=false*/, State ne
 
 void OvmsServerV3::MetricModified(OvmsMetric* metric)
   {
+  if (!m_updatetime_immediately) return;
+  if (!m_mgconn) return;
+  if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
+  const std::string metric_name(metric->m_name);
+  if (!m_metrics_filter.CheckFilter(metric_name))
+    return;
+    
+  if (m_metrics_immediately.CheckFilter(metric_name) && 
+      metric->IsModifiedAndClear(MyOvmsServerV3Modifier))
+    {
+    TransmitMetric(metric);
+    }
   }
 
 bool OvmsServerV3::NotificationFilter(OvmsNotifyType* type, const char* subtype)
@@ -1041,9 +1048,18 @@ void OvmsServerV3::ConfigChanged(OvmsConfigParam* param)
   m_updatetime_keepalive = MyConfig.GetParamValueInt("server.v3", "updatetime.keepalive", m_updatetime_keepalive);
   m_legacy_event_topic = MyConfig.GetParamValueBool("server.v3", "events.legacy_topic", true);
   m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
+  m_updatetime_immediately = MyConfig.GetParamValueBool("server.v3", "updatetime.immediately", false);
+
+  const char* exclude_immediate = "v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc,"
+                               "v.c.time, v.e.drivetime, m.monotonic, v.e.parktime, m.net.wifi.sq, m.net.sq, m.net.mdm.sq," 
+                               "v.g.time, v.p.gpstime, v.b.12v.voltage, m.freeram";
 
   m_metrics_filter.LoadFilters(MyConfig.GetParamValue("server.v3", "metrics.include"),
                                MyConfig.GetParamValue("server.v3", "metrics.exclude"));
+  m_metrics_priority.LoadFilters(MyConfig.GetParamValue("server.v3", "metrics.priority"),
+                               MyConfig.GetParamValue("server.v3", "metrics.exclude"));
+  m_metrics_immediately.LoadFilters(MyConfig.GetParamValue("server.v3", "metrics.immediately"),
+                               exclude_immediate);
   // New configurable timings:
   m_conn_stable_wait = MyConfig.GetParamValueInt("server.v3", "conn.stable_wait", m_conn_stable_wait);
   if (m_conn_stable_wait < 3) m_conn_stable_wait = 3;

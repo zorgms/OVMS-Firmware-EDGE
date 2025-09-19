@@ -1595,10 +1595,11 @@ void OvmsWebServer::HandleCfgServerV2(PageEntry_t& p, PageContext_t& c)
 void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
 {
   std::string error;
-  std::string server, user, password, port, topic_prefix, metrics_priority;
+  std::string server, user, password, port, topic_prefix;
   std::string updatetime_connected, updatetime_idle, updatetime_on;
   std::string updatetime_charging, updatetime_awake, updatetime_sendall, updatetime_keepalive;
-  bool tls, legacy_event_topic, updatetime_priority;
+  std::string metrics_priority, metrics_include, metrics_exclude, metrics_immediately;
+  bool tls, legacy_event_topic, updatetime_priority, updatetime_immediately;
 
   if (c.method == "POST") {
     // process form submission:
@@ -1617,7 +1618,11 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_sendall = c.getvar("updatetime_sendall");
     updatetime_keepalive = c.getvar("updatetime_keepalive");
     updatetime_priority = (c.getvar("updatetime_priority") == "yes");
+    updatetime_immediately = (c.getvar("updatetime_immediately") == "yes");
     metrics_priority = c.getvar("metrics_priority");
+    metrics_include = c.getvar("metrics_include");
+    metrics_exclude = c.getvar("metrics_exclude");
+    metrics_immediately = c.getvar("metrics_immediately");
 
     // validate:
     if (port != "") {
@@ -1680,7 +1685,11 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
       MyConfig.SetParamValue("server.v3", "updatetime.sendall", updatetime_sendall);
       MyConfig.SetParamValue("server.v3", "updatetime.keepalive", updatetime_keepalive);
       MyConfig.SetParamValueBool("server.v3", "updatetime.priority", updatetime_priority);
+      MyConfig.SetParamValueBool("server.v3", "updatetime.immediately", updatetime_immediately);
       MyConfig.SetParamValue("server.v3", "metrics.priority", metrics_priority);
+      MyConfig.SetParamValue("server.v3", "metrics.include", metrics_include);
+      MyConfig.SetParamValue("server.v3", "metrics.exclude", metrics_exclude);
+      MyConfig.SetParamValue("server.v3", "metrics.immediately", metrics_immediately);
 
       c.head(200);
       c.alert("success", "<p class=\"lead\">Server V3 (MQTT) connection configured.</p>");
@@ -1711,7 +1720,11 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_sendall = MyConfig.GetParamValue("server.v3", "updatetime.sendall");
     updatetime_keepalive = MyConfig.GetParamValue("server.v3", "updatetime.keepalive", "1740");
     updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
+    updatetime_immediately = MyConfig.GetParamValueBool("server.v3", "updatetime.immediately", false);
     metrics_priority = MyConfig.GetParamValue("server.v3", "metrics.priority");
+    metrics_include = MyConfig.GetParamValue("server.v3", "metrics.include");
+    metrics_exclude = MyConfig.GetParamValue("server.v3", "metrics.exclude");
+    metrics_immediately = MyConfig.GetParamValue("server.v3", "metrics.immediately");
 
     // generate form:
     c.head(200);
@@ -1740,12 +1753,6 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     "optional, default: ovms/<username>/<vehicle id>/");
 
   c.fieldset_start("Update intervals");
-  c.input_checkbox("prioritize metrics", "updatetime_priority", updatetime_priority,
-    "<p>Metrics should be updated before other MQTT traffic when Car is awake. This can contribute to smoother tracking on V3 servers.</p>"
-    "<p><strong>Note:</strong> The update interval corresponds to the <strong>...on</strong> setting!</p>");
-  c.input_text("priority metrics", "metrics_priority", metrics_priority.c_str(), NULL,
-    "<p>default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc</br>"
-    "additional comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*, m.net.*</p>");
   c.input("number", "…idle", "updatetime_idle", updatetime_idle.c_str(), "default: 600", "default: 600, update interval when client not connected", "min=\"1\" max=\"1200\" step=\"1\"", "seconds");
   c.input("number", "…on", "updatetime_on", updatetime_on.c_str(), "default: 5", "default: 5, update interval when Car is on", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
   c.input("number", "…charging", "updatetime_charging", updatetime_charging.c_str(), "default: 10", "default: 10, update interval when Car is charging", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
@@ -1759,9 +1766,27 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     "and error. Symptoms of keepalive being too high are a lack of metric updates "
     "after a certain point, or &quot;Disconnected from OVMS Server V3&quot; "
     "appearing in the log.</p>",
-    "min=\"60\" max=\"3600\" step=\"1\"", "seconds");
-  
+    "min=\"60\" max=\"3600\" step=\"1\"", "seconds");  
   c.fieldset_end();
+  
+  c.fieldset_start("Update Configuration");
+  c.input_checkbox("prioritize metrics", "updatetime_priority", updatetime_priority,
+    "<p>Metrics should be updated before other MQTT traffic when Car is awake. This can contribute to smoother tracking on V3 servers.</p>"
+    "<p><strong>Note:</strong> The update interval corresponds to the <strong>...on</strong> setting!</p>");
+  c.input_checkbox("Update metrics immediately", "updatetime_immediately", updatetime_immediately,
+    "<p>Metrics should be sent immediately when they change.</p>"
+    "<p><strong>Note:</strong> This setting significantly increases data transfer!</p>");
+  c.input_text("priority metrics", "metrics_priority", metrics_priority.c_str(), NULL,
+    "<p>default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc</br>"
+    "additional comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*, m.net.*</p>");
+  c.input_text("metrics include", "metrics_include", metrics_include.c_str(), NULL,
+    "<p>comma-separated list of metrics to include update, wildcard supported e.g. v.c.*, m.net.*</p>");
+  c.input_text("metrics exclude", "metrics_exclude", metrics_exclude.c_str(), NULL,
+    "<p>comma-separated list of metrics to exclude update, wildcard supported e.g. v.c.*, m.net.*</p>");
+  c.input_text("metrics immediate", "metrics_immediately", metrics_immediately.c_str(), "set which ones update immediately",
+    "<p>comma-separated list of metrics to send immediately when they change, wildcard supported e.g. v.c.*, m.net.*</p>");
+  c.fieldset_end();
+
   c.hr();
   c.input_button("default", "Save");
   c.form_end();
