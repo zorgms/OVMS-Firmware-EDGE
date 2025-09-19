@@ -40,7 +40,7 @@ static const char *TAG = "ovms-server-v3";
 #include "metrics_standard.h"
 #include "esp_system.h"              // <- for esp_random() (jitter)
 #include <vector>
-#include <algorithm>
+#include "id_filter.h"               // <- use IdFilter for pattern matching
 #if CONFIG_MG_ENABLE_SSL
 #include "ovms_tls.h"
 #endif
@@ -205,13 +205,12 @@ OvmsServerV3::OvmsServerV3(const char* name)
   m_lasttx_sendall = 0;
   m_lasttx_priority = 0;
   m_peers = 0;
-  m_vehicle_stream = 0;
   m_updatetime_idle = 600;
-  m_updatetime_connected = 60;
+  m_updatetime_connected = 10;
   m_updatetime_on = 5;  
-  m_updatetime_awake = 60;      // disabled, too much interval confusion
-  m_updatetime_charging = 20;   // disabled, too much interval confusion
-  m_updatetime_sendall = 900;   // disabled, too much interval confusion
+  m_updatetime_awake = 60;
+  m_updatetime_charging = 10;
+  m_updatetime_sendall = 1200;
   m_updatetime_keepalive = 29*60;
   m_legacy_event_topic = true;
   m_notify_info_pending = false;
@@ -419,84 +418,58 @@ void OvmsServerV3::TransmitMetric(OvmsMetric* metric)
   
 void OvmsServerV3::TransmitPriorityMetrics()
   {
-  // Default priority metrics (GPS + time)
-  const char* s_priority_gps_metrics[] = {
-    "v.p.latitude",
-    "v.p.longitude",
-    "v.p.altitude",
-    "v.p.speed",
-    "v.p.gpsspeed",
-    "m.time.utc",
-  };
+    // Default priority metrics (GPS + time)
+    const char* s_priority_gps_metrics[] = {
+      "v.p.latitude",
+      "v.p.longitude",
+      "v.p.altitude",
+      "v.p.speed",
+      "v.p.gpsspeed",
+      "m.time.utc",
+    };
 
-  const size_t s_priority_gps_metrics_count =
-    sizeof(s_priority_gps_metrics) / sizeof(s_priority_gps_metrics[0]);
+    const size_t s_priority_gps_metrics_count =
+      sizeof(s_priority_gps_metrics) / sizeof(s_priority_gps_metrics[0]);
 
-  OvmsMutexLock mg(&m_mgconn_mutex);
-  if (!m_mgconn) return;
-  if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
+    OvmsMutexLock mg(&m_mgconn_mutex);
+    if (!m_mgconn) return;
+    if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
 
-  // Helper to collect what we've already handled to avoid duplicates:
-  std::vector<std::string> processed;
-  auto already_processed = [&](const std::string& name) {
-    return std::find(processed.begin(), processed.end(), name) != processed.end();
-  };
-  auto mark_processed = [&](const std::string& name) {
-    processed.push_back(name);
-  };
+    // Helper to collect what we've already handled to avoid duplicates:
+    std::vector<std::string> processed;
+    auto already_processed = [&](const std::string& name) {
+      return std::find(processed.begin(), processed.end(), name) != processed.end();
+    };
+    auto mark_processed = [&](const std::string& name) {
+      processed.push_back(name);
+    };
 
-  // Helper to send a metric by name if modified:
-  auto send_metric_by_name = [&](const std::string& name) {
-    if (name.empty() || already_processed(name)) return;
-    OvmsMetric* m = MyMetrics.Find(name.c_str());
-    if (!m) return;
-    if (m->IsModifiedAndClear(MyOvmsServerV3Modifier))
-      TransmitMetric(m);
-    mark_processed(name);
-  };
+    auto send_metric_by_name = [&](const std::string& name) {
+      if (name.empty() || already_processed(name)) return;
+      OvmsMetric* m = MyMetrics.Find(name.c_str());
+      if (!m) return;
+      if (m->IsModifiedAndClear(MyOvmsServerV3Modifier))
+        TransmitMetric(m);
+      mark_processed(name);
+    };
 
-  // 1) Send defaults:
-  for (size_t i = 0; i < s_priority_gps_metrics_count; ++i)
-    send_metric_by_name(s_priority_gps_metrics[i]);
+    // 1) Send defaults:
+    for (size_t i = 0; i < s_priority_gps_metrics_count; ++i)
+      send_metric_by_name(s_priority_gps_metrics[i]);
 
-  // 2) Add configurable extra priority metrics:
-  //    Param: server.v3 / metrics.priority
-  //    Tokens separated by whitespace, comma, semicolon or newline.
-  //    Supports simple wildcard '*' (full or prefix*), like MatchPattern().
-  std::string extras = MyConfig.GetParamValue("server.v3", "metrics.priority");
-  if (!extras.empty())
+    // 2) Add configurable extra priority metrics via IdFilter:
+    //    Param: server.v3 / metrics.priority
+    std::string extras = MyConfig.GetParamValue("server.v3", "metrics.priority");
+    if (!extras.empty())
     {
-    // Parse tokens:
-    std::vector<std::string> tokens;
-    std::string cur;
-    for (char c : extras)
-      {
-      if (c==' '||c=='\t'||c=='\r'||c=='\n'||c==','||c==';')
-        { if (!cur.empty()) { tokens.push_back(cur); cur.clear(); } }
-      else
-        cur.push_back(c);
-      }
-    if (!cur.empty()) tokens.push_back(cur);
+    IdFilter extrafilter(TAG);
+    extrafilter.LoadFilters(extras); // include-only
 
-    // For each token: pattern => match all metrics, otherwise single metric name
-    for (const auto& tok : tokens)
+    for (OvmsMetric* m = MyMetrics.m_first; m; m = m->m_next)
       {
-      if (tok.empty()) continue;
-
-      bool has_wildcard = (!tok.empty() && (tok == "*" || tok.back() == '*'));
-      if (has_wildcard)
-        {
-        for (OvmsMetric* m = MyMetrics.m_first; m; m = m->m_next)
-          {
-          const std::string mname(m->m_name);
-          if (MatchPattern(mname, tok))
-            send_metric_by_name(mname);
-          }
-        }
-      else
-        {
-        send_metric_by_name(tok);
-        }
+      const std::string mname(m->m_name);
+      if (extrafilter.CheckFilter(mname))
+        send_metric_by_name(mname);
       }
     }
   }
@@ -1059,10 +1032,12 @@ void OvmsServerV3::EventListener(std::string event, void* data)
  */
 void OvmsServerV3::ConfigChanged(OvmsConfigParam* param)
   {
-  m_vehicle_stream = MyConfig.GetParamValueInt("vehicle", "stream", m_vehicle_stream);
   m_updatetime_connected = MyConfig.GetParamValueInt("server.v3", "updatetime.connected", m_updatetime_connected);
   m_updatetime_idle = MyConfig.GetParamValueInt("server.v3", "updatetime.idle", m_updatetime_idle);
   m_updatetime_on = MyConfig.GetParamValueInt("server.v3", "updatetime.on", m_updatetime_on);
+  m_updatetime_awake = MyConfig.GetParamValueInt("server.v3", "updatetime.awake", m_updatetime_awake);
+  m_updatetime_charging = MyConfig.GetParamValueInt("server.v3", "updatetime.charging", m_updatetime_charging);
+  m_updatetime_sendall = MyConfig.GetParamValueInt("server.v3", "updatetime.sendall", m_updatetime_sendall);
   m_updatetime_keepalive = MyConfig.GetParamValueInt("server.v3", "updatetime.keepalive", m_updatetime_keepalive);
   m_legacy_event_topic = MyConfig.GetParamValueBool("server.v3", "events.legacy_topic", true);
   m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
@@ -1186,8 +1161,17 @@ void OvmsServerV3::Ticker1(std::string event, void* data)
     {      
     bool carawake = StandardMetrics.ms_v_env_awake->AsBool();
     bool caron = StandardMetrics.ms_v_env_on->AsBool();
+    bool carcharging = StandardMetrics.ms_v_charge_inprogress->AsBool();
     int64_t now = StandardMetrics.ms_m_monotonic->AsInt();
-    int next = caron ? m_updatetime_on : (m_peers > 0 || carawake) ? m_updatetime_connected : m_updatetime_idle;
+    int next = m_updatetime_idle;
+    if (caron)
+      next = m_updatetime_on;
+    else if (carcharging)
+      next = m_updatetime_charging;
+    else if (m_peers > 0)
+      next = m_updatetime_connected;
+    else if (carawake)
+      next = m_updatetime_awake;
 
     if (m_sendall)
       {
@@ -1214,7 +1198,7 @@ void OvmsServerV3::Ticker1(std::string event, void* data)
     if (m_notify_data_pending && m_notify_data_waitcomp==0)
       TransmitPendingNotificationsData();
       
-    if ((m_lasttx_sendall == 0) || (now > (m_lasttx_sendall + m_updatetime_keepalive)))
+    if ((m_lasttx_sendall == 0) || (now > (m_lasttx_sendall + m_updatetime_sendall)))
       {
       //ESP_LOGI(TAG, "Transmit all metrics");
       m_lasttx_sendall = now;
@@ -1365,33 +1349,23 @@ void ovmsv3_update(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc
     }
   }
 
-// Process metric request (payload: multiple patterns separated by whitespace / , ; or newlines)
+// Process metric request (payload: include patterns; use IdFilter)
 void OvmsServerV3::ProcessClientMetricRequest(const std::string& clientid, const std::string& payload)
-  {
+{
   if (payload.empty()) return;
-  std::vector<std::string> patterns;
-  std::string cur;
-  for (char c: payload)
-    {
-    if (c==' '||c=='\t'||c=='\r'||c=='\n'||c==','||c==';')
-      { if (!cur.empty()) { patterns.push_back(cur); cur.clear(); } }
-    else cur.push_back(c);
-    }
-  if (!cur.empty()) patterns.push_back(cur);
-  if (patterns.empty()) return;
+
+  // Build a temporary include-only filter from the payload (supports *, prefix*)
+  IdFilter reqfilter(TAG);
+  reqfilter.LoadFilters(payload); // include only
 
   for (OvmsMetric* m = MyMetrics.m_first; m; m = m->m_next)
-    {
-    const std::string name(m->m_name);
-    bool match=false;
-    for (auto& p: patterns)
-      {
-      if (MatchPattern(name,p)) { match=true; break; }
-      }
-    if (!match) continue;
-    TransmitMetric(m);
-    }
+  {
+  const std::string name(m->m_name);
+  if (!reqfilter.CheckFilter(name))
+    continue;
+  TransmitMetric(m);
   }
+}
 
 // Process config request (payload: param/instance)
 void OvmsServerV3::ProcessClientConfigRequest(const std::string& clientid, const std::string& payload)

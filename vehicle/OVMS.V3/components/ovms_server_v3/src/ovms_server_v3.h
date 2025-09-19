@@ -105,7 +105,6 @@ class OvmsServerV3 : public OvmsServer
     int64_t m_lasttx_sendall;
     int64_t m_lasttx_priority;
     int m_peers;
-    int m_vehicle_stream;
     int m_updatetime_idle;
     int m_updatetime_connected;
     int m_updatetime_awake;

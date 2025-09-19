@@ -1596,7 +1596,8 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
 {
   std::string error;
   std::string server, user, password, port, topic_prefix, metrics_priority;
-  std::string updatetime_connected, updatetime_idle, updatetime_on, updatetime_keepalive;
+  std::string updatetime_connected, updatetime_idle, updatetime_on;
+  std::string updatetime_charging, updatetime_awake, updatetime_sendall, updatetime_keepalive;
   bool tls, legacy_event_topic, updatetime_priority;
 
   if (c.method == "POST") {
@@ -1611,6 +1612,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_connected = c.getvar("updatetime_connected");
     updatetime_idle = c.getvar("updatetime_idle");
     updatetime_on = c.getvar("updatetime_on");
+    updatetime_charging = c.getvar("updatetime_charging");
+    updatetime_awake = c.getvar("updatetime_awake");
+    updatetime_sendall = c.getvar("updatetime_sendall");
     updatetime_keepalive = c.getvar("updatetime_keepalive");
     updatetime_priority = (c.getvar("updatetime_priority") == "yes");
     metrics_priority = c.getvar("metrics_priority");
@@ -1637,8 +1641,23 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
         error += "<li data-input=\"updatetime_on\">Update interval (on) must be at least 1 second</li>";
       }
     }
+    if (updatetime_charging != "") {
+      if (atoi(updatetime_charging.c_str()) < 1) {
+        error += "<li data-input=\"updatetime_charging\">Update interval (charging) must be at least 1 second</li>";
+      }
+    }
+    if (updatetime_awake != "") {
+      if (atoi(updatetime_awake.c_str()) < 1) {
+        error += "<li data-input=\"updatetime_awake\">Update interval (awake) must be at least 1 second</li>";
+      }
+    }
+    if (updatetime_sendall != "") {
+      if (atoi(updatetime_sendall.c_str()) < 60) {
+        error += "<li data-input=\"updatetime_sendall\">Update interval (sendall) must be at least 60 seconds</li>";
+      }
+    }
     if (updatetime_keepalive != "") {
-      if (atoi(updatetime_keepalive.c_str()) < 300) {
+      if (atoi(updatetime_keepalive.c_str()) < 60) {
         error += "<li data-input=\"updatetime_keepalive\">Keepalive interval must be at least 300 seconds</li>";
       }
     }
@@ -1655,10 +1674,10 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
       MyConfig.SetParamValue("server.v3", "topic.prefix", topic_prefix);
       MyConfig.SetParamValue("server.v3", "updatetime.connected", updatetime_connected);
       MyConfig.SetParamValue("server.v3", "updatetime.idle", updatetime_idle);
-      if (updatetime_on == "")
-        MyConfig.DeleteInstance("server.v3", "updatetime.on");
-      else
-        MyConfig.SetParamValue("server.v3", "updatetime.on", updatetime_on);
+      MyConfig.SetParamValue("server.v3", "updatetime.on", updatetime_on);
+      MyConfig.SetParamValue("server.v3", "updatetime.charging", updatetime_charging);
+      MyConfig.SetParamValue("server.v3", "updatetime.awake", updatetime_awake);
+      MyConfig.SetParamValue("server.v3", "updatetime.sendall", updatetime_sendall);
       MyConfig.SetParamValue("server.v3", "updatetime.keepalive", updatetime_keepalive);
       MyConfig.SetParamValueBool("server.v3", "updatetime.priority", updatetime_priority);
       MyConfig.SetParamValue("server.v3", "metrics.priority", metrics_priority);
@@ -1687,6 +1706,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_connected = MyConfig.GetParamValue("server.v3", "updatetime.connected");
     updatetime_idle = MyConfig.GetParamValue("server.v3", "updatetime.idle");
     updatetime_on = MyConfig.GetParamValue("server.v3", "updatetime.on");
+    updatetime_charging = MyConfig.GetParamValue("server.v3", "updatetime.charging");
+    updatetime_awake = MyConfig.GetParamValue("server.v3", "updatetime.awake");
+    updatetime_sendall = MyConfig.GetParamValue("server.v3", "updatetime.sendall");
     updatetime_keepalive = MyConfig.GetParamValue("server.v3", "updatetime.keepalive", "1740");
     updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
     metrics_priority = MyConfig.GetParamValue("server.v3", "metrics.priority");
@@ -1723,10 +1745,13 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     "<p><strong>Note:</strong> The update interval corresponds to the <strong>...on</strong> setting!</p>");
   c.input_text("priority metrics", "metrics_priority", metrics_priority.c_str(), NULL,
     "<p>default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc</br>"
-    "additional space/comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*</p>");
-  c.input("number", "…connected", "updatetime_connected", updatetime_connected.c_str(), "default: 60", "default: 60, update interval when client is connected", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
-  c.input("number", "…idle", "updatetime_idle", updatetime_idle.c_str(), "default: 600", "default: 600, update interval when client not connected", "min=\"0\" max=\"1200\" step=\"1\"", "seconds");
-  c.input("number", "…on", "updatetime_on", updatetime_on.c_str(), "default: 5", "default: 5, update interval when Car is on", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
+    "additional comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*, m.net.*</p>");
+  c.input("number", "…idle", "updatetime_idle", updatetime_idle.c_str(), "default: 600", "default: 600, update interval when client not connected", "min=\"1\" max=\"1200\" step=\"1\"", "seconds");
+  c.input("number", "…on", "updatetime_on", updatetime_on.c_str(), "default: 5", "default: 5, update interval when Car is on", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
+  c.input("number", "…charging", "updatetime_charging", updatetime_charging.c_str(), "default: 10", "default: 10, update interval when Car is charging", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
+  c.input("number", "…awake", "updatetime_awake", updatetime_awake.c_str(), "default: 60", "default: 60, update interval when Car is awake", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
+  c.input("number", "…connected", "updatetime_connected", updatetime_connected.c_str(), "default: 10", "default: 10, update interval when App/Client is connected", "min=\"1\" max=\"600\" step=\"1\"", "seconds");
+  c.input("number", "…sendall", "updatetime_sendall", updatetime_sendall.c_str(), "default: 1200", "default: 1200", "min=\"60\" max=\"3600\" step=\"1\"", "seconds");
   c.input("number", "…keepalive", "updatetime_keepalive", updatetime_keepalive.c_str(), "default: 1740",
     "<p>default: 1740. Keepalive defines how often PINGREQs should be sent if there's inactivity. "
     "It should be set slightly shorter than the network's NAT timeout "
