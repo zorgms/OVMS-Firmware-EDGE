@@ -1595,8 +1595,8 @@ void OvmsWebServer::HandleCfgServerV2(PageEntry_t& p, PageContext_t& c)
 void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
 {
   std::string error;
-  std::string server, user, password, port, topic_prefix;
-  std::string updatetime_connected, updatetime_idle, updatetime_on, updatetime_charging, updatetime_awake, updatetime_sendall, updatetime_keepalive;
+  std::string server, user, password, port, topic_prefix, metrics_priority;
+  std::string updatetime_connected, updatetime_idle, updatetime_on, updatetime_keepalive;
   bool tls, legacy_event_topic, updatetime_priority;
 
   if (c.method == "POST") {
@@ -1611,11 +1611,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_connected = c.getvar("updatetime_connected");
     updatetime_idle = c.getvar("updatetime_idle");
     updatetime_on = c.getvar("updatetime_on");
-    updatetime_charging = c.getvar("updatetime_charging");
-    updatetime_awake = c.getvar("updatetime_awake");
-    updatetime_sendall = c.getvar("updatetime_sendall");
     updatetime_keepalive = c.getvar("updatetime_keepalive");
     updatetime_priority = (c.getvar("updatetime_priority") == "yes");
+    metrics_priority = c.getvar("metrics_priority");
 
     // validate:
     if (port != "") {
@@ -1639,27 +1637,11 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
         error += "<li data-input=\"updatetime_on\">Update interval (on) must be at least 1 second</li>";
       }
     }
-    if (updatetime_charging != "") {
-      if (atoi(updatetime_charging.c_str()) < 1) {
-        error += "<li data-input=\"updatetime_charging\">Update interval (charging) must be at least 1 second</li>";
-      }
-    }
-    if (updatetime_awake != "") {
-      if (atoi(updatetime_awake.c_str()) < 1) {
-        error += "<li data-input=\"updatetime_awake\">Update interval (awake) must be at least 1 second</li>";
-      }
-    }
-    if (updatetime_sendall != "") {
-      if (atoi(updatetime_sendall.c_str()) < 60) {
-        error += "<li data-input=\"updatetime_sendall\">Update interval (sendall) must be at least 60 seconds</li>";
-      }
-    }
     if (updatetime_keepalive != "") {
-      if (atoi(updatetime_keepalive.c_str()) < 1) {
-        error += "<li data-input=\"updatetime_keepalive\">Update interval (keepalive) must be at least 1 second</li>";
+      if (atoi(updatetime_keepalive.c_str()) < 300) {
+        error += "<li data-input=\"updatetime_keepalive\">Keepalive interval must be at least 300 seconds</li>";
       }
     }
-
 
     if (error == "") {
       // success:
@@ -1677,23 +1659,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
         MyConfig.DeleteInstance("server.v3", "updatetime.on");
       else
         MyConfig.SetParamValue("server.v3", "updatetime.on", updatetime_on);
-      if (updatetime_charging == "")
-        MyConfig.DeleteInstance("server.v3", "updatetime.charging");
-      else
-        MyConfig.SetParamValue("server.v3", "updatetime.charging", updatetime_charging);
-      if (updatetime_awake == "")
-        MyConfig.DeleteInstance("server.v3", "updatetime.awake");
-      else
-        MyConfig.SetParamValue("server.v3", "updatetime.awake", updatetime_awake);
-      if (updatetime_sendall == "")
-        MyConfig.DeleteInstance("server.v3", "updatetime.sendall");
-      else
-        MyConfig.SetParamValue("server.v3", "updatetime.sendall", updatetime_sendall);
-      if (updatetime_keepalive == "")
-        MyConfig.DeleteInstance("server.v3", "updatetime.keepalive");
-      else
-        MyConfig.SetParamValue("server.v3", "updatetime.keepalive", updatetime_keepalive);
+      MyConfig.SetParamValue("server.v3", "updatetime.keepalive", updatetime_keepalive);
       MyConfig.SetParamValueBool("server.v3", "updatetime.priority", updatetime_priority);
+      MyConfig.SetParamValue("server.v3", "metrics.priority", metrics_priority);
 
       c.head(200);
       c.alert("success", "<p class=\"lead\">Server V3 (MQTT) connection configured.</p>");
@@ -1719,11 +1687,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     updatetime_connected = MyConfig.GetParamValue("server.v3", "updatetime.connected");
     updatetime_idle = MyConfig.GetParamValue("server.v3", "updatetime.idle");
     updatetime_on = MyConfig.GetParamValue("server.v3", "updatetime.on");
-    updatetime_charging = MyConfig.GetParamValue("server.v3", "updatetime.charging");
-    updatetime_awake = MyConfig.GetParamValue("server.v3", "updatetime.awake");
-    updatetime_sendall = MyConfig.GetParamValue("server.v3", "updatetime.sendall");
-    updatetime_keepalive = MyConfig.GetParamValue("server.v3", "updatetime.keepalive");
+    updatetime_keepalive = MyConfig.GetParamValue("server.v3", "updatetime.keepalive", "1740");
     updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
+    metrics_priority = MyConfig.GetParamValue("server.v3", "metrics.priority");
 
     // generate form:
     c.head(200);
@@ -1752,15 +1718,15 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     "optional, default: ovms/<username>/<vehicle id>/");
 
   c.fieldset_start("Update intervals");
-  c.input_checkbox("prioritize GPS tracking metrics", "updatetime_priority", updatetime_priority,
-    "<p>GPS tracking metrics should be updated before other MQTT traffic. This can contribute to smoother tracking on V3 servers.</p>"
-    "<p><strong>Note:</strong> The update interval corresponds to the <strong>Vehicle stream</strong> setting!</p>");
+  c.input_checkbox("prioritize metrics", "updatetime_priority", updatetime_priority,
+    "<p>Metrics should be updated before other MQTT traffic when Car is awake. This can contribute to smoother tracking on V3 servers.</p>"
+    "<p><strong>Note:</strong> The update interval corresponds to the <strong>...on</strong> setting!</p>");
+  c.input_text("priority metrics", "metrics_priority", metrics_priority.c_str(), NULL,
+    "<p>default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc</br>"
+    "additional space/comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*</p>");
   c.input("number", "…connected", "updatetime_connected", updatetime_connected.c_str(), "default: 60", "default: 60, update interval when client is connected", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
   c.input("number", "…idle", "updatetime_idle", updatetime_idle.c_str(), "default: 600", "default: 600, update interval when client not connected", "min=\"0\" max=\"1200\" step=\"1\"", "seconds");
-  c.input("number", "…on", "updatetime_on", updatetime_on.c_str(), "default: 5", "default: 5", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
-  //c.input("number", "…charging", "updatetime_charging", updatetime_charging.c_str(), "default: 20", "default: 20", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
-  //c.input("number", "…awake", "updatetime_awake", updatetime_awake.c_str(), "default: 60", "default: 60", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
-  //c.input("number", "…sendall", "updatetime_sendall", updatetime_sendall.c_str(), "default: 900", "default: 900", "min=\"0\" max=\"1800\" step=\"1\"", "seconds");
+  c.input("number", "…on", "updatetime_on", updatetime_on.c_str(), "default: 5", "default: 5, update interval when Car is on", "min=\"0\" max=\"600\" step=\"1\"", "seconds");
   c.input("number", "…keepalive", "updatetime_keepalive", updatetime_keepalive.c_str(), "default: 1740",
     "<p>default: 1740. Keepalive defines how often PINGREQs should be sent if there's inactivity. "
     "It should be set slightly shorter than the network's NAT timeout "
@@ -1768,7 +1734,7 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     "and error. Symptoms of keepalive being too high are a lack of metric updates "
     "after a certain point, or &quot;Disconnected from OVMS Server V3&quot; "
     "appearing in the log.</p>",
-    "min=\"0\" max=\"3600\" step=\"1\"", "seconds");
+    "min=\"60\" max=\"3600\" step=\"1\"", "seconds");
   
   c.fieldset_end();
   c.hr();

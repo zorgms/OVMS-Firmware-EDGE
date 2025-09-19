@@ -416,32 +416,87 @@ void OvmsServerV3::TransmitMetric(OvmsMetric* metric)
     MG_MQTT_QOS(0) | MG_MQTT_RETAIN, val.c_str(), val.length());
   ESP_LOGD(TAG,"Tx metric %s=%s",topic.c_str(),val.c_str());
   }
-
-static const char* s_priority_gps_metrics[] = {
-  "v.p.latitude",
-  "v.p.longitude",
-  "v.p.altitude",
-  "v.p.speed",
-  "v.p.gpsspeed",
-  "m.time.utc",
-};
-
-static const size_t s_priority_gps_metrics_count =
-  sizeof(s_priority_gps_metrics)/sizeof(s_priority_gps_metrics[0]);
   
 void OvmsServerV3::TransmitPriorityMetrics()
   {
+  // Default priority metrics (GPS + time)
+  const char* s_priority_gps_metrics[] = {
+    "v.p.latitude",
+    "v.p.longitude",
+    "v.p.altitude",
+    "v.p.speed",
+    "v.p.gpsspeed",
+    "m.time.utc",
+  };
+
+  const size_t s_priority_gps_metrics_count =
+    sizeof(s_priority_gps_metrics) / sizeof(s_priority_gps_metrics[0]);
+
   OvmsMutexLock mg(&m_mgconn_mutex);
   if (!m_mgconn) return;
   if (!StandardMetrics.ms_s_v3_connected->AsBool()) return;
 
-  for (size_t i = 0; i < s_priority_gps_metrics_count; ++i)
-    {
-    OvmsMetric* m = MyMetrics.Find(s_priority_gps_metrics[i]);
-    if (!m) continue;
+  // Helper to collect what we've already handled to avoid duplicates:
+  std::vector<std::string> processed;
+  auto already_processed = [&](const std::string& name) {
+    return std::find(processed.begin(), processed.end(), name) != processed.end();
+  };
+  auto mark_processed = [&](const std::string& name) {
+    processed.push_back(name);
+  };
+
+  // Helper to send a metric by name if modified:
+  auto send_metric_by_name = [&](const std::string& name) {
+    if (name.empty() || already_processed(name)) return;
+    OvmsMetric* m = MyMetrics.Find(name.c_str());
+    if (!m) return;
     if (m->IsModifiedAndClear(MyOvmsServerV3Modifier))
-      {
       TransmitMetric(m);
+    mark_processed(name);
+  };
+
+  // 1) Send defaults:
+  for (size_t i = 0; i < s_priority_gps_metrics_count; ++i)
+    send_metric_by_name(s_priority_gps_metrics[i]);
+
+  // 2) Add configurable extra priority metrics:
+  //    Param: server.v3 / metrics.priority
+  //    Tokens separated by whitespace, comma, semicolon or newline.
+  //    Supports simple wildcard '*' (full or prefix*), like MatchPattern().
+  std::string extras = MyConfig.GetParamValue("server.v3", "metrics.priority");
+  if (!extras.empty())
+    {
+    // Parse tokens:
+    std::vector<std::string> tokens;
+    std::string cur;
+    for (char c : extras)
+      {
+      if (c==' '||c=='\t'||c=='\r'||c=='\n'||c==','||c==';')
+        { if (!cur.empty()) { tokens.push_back(cur); cur.clear(); } }
+      else
+        cur.push_back(c);
+      }
+    if (!cur.empty()) tokens.push_back(cur);
+
+    // For each token: pattern => match all metrics, otherwise single metric name
+    for (const auto& tok : tokens)
+      {
+      if (tok.empty()) continue;
+
+      bool has_wildcard = (!tok.empty() && (tok == "*" || tok.back() == '*'));
+      if (has_wildcard)
+        {
+        for (OvmsMetric* m = MyMetrics.m_first; m; m = m->m_next)
+          {
+          const std::string mname(m->m_name);
+          if (MatchPattern(mname, tok))
+            send_metric_by_name(mname);
+          }
+        }
+      else
+        {
+        send_metric_by_name(tok);
+        }
       }
     }
   }
@@ -1007,10 +1062,7 @@ void OvmsServerV3::ConfigChanged(OvmsConfigParam* param)
   m_updatetime_sendall = MyConfig.GetParamValueInt("server.v3", "updatetime.sendall", m_updatetime_sendall);
   m_updatetime_keepalive = MyConfig.GetParamValueInt("server.v3", "updatetime.keepalive", m_updatetime_keepalive);
   m_legacy_event_topic = MyConfig.GetParamValueBool("server.v3", "events.legacy_topic", true);
-
-  #ifdef CONFIG_OVMS_COMP_CELLULAR
-    m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
-  #endif
+  m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
 
   m_metrics_filter.LoadFilters(MyConfig.GetParamValue("server.v3", "metrics.include"),
                                MyConfig.GetParamValue("server.v3", "metrics.exclude"));
@@ -1168,9 +1220,9 @@ void OvmsServerV3::Ticker1(std::string event, void* data)
       m_lasttx = now;
       TransmitAllMetrics();
       }
-    else if ((m_lasttx_priority==0) || (m_updatetime_priority && carawake && m_vehicle_stream > 0 && (now > (m_lasttx_priority + m_vehicle_stream))))
+    else if ((m_lasttx_priority==0) || (m_updatetime_priority && carawake && (now > (m_lasttx_priority + m_updatetime_on))))
       {
-      //ESP_LOGI(TAG, "Transmit GPS priority metrics");
+      //ESP_LOGI(TAG, "Transmit priority metrics");
       m_lasttx_priority = now;
       TransmitPriorityMetrics();
       }
@@ -1183,13 +1235,18 @@ void OvmsServerV3::Ticker1(std::string event, void* data)
     }
   }
 
-void OvmsServerV3::RequestUpdate(bool txall)
+void OvmsServerV3::RequestUpdate(const char* requested)
   {
-  if (txall)
+  if (requested == NULL) return;
+  if (strcmp(requested, "all") == 0)
     {
     m_lasttx_sendall = 0;
     }
-  else
+  else if (strcmp(requested, "priority") == 0)
+    {
+    m_lasttx_priority = 0;
+    }
+  else if (strcmp(requested, "modified") == 0)
     {
     m_lasttx = 0;
     }
@@ -1289,10 +1346,20 @@ void ovmsv3_update(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc
     }
   else
     {
-    bool txall = (strcmp(cmd->GetName(), "all") == 0);
-    MyOvmsServerV3->RequestUpdate(txall);
-    writer->printf("Server V3 data update for %s metrics has been scheduled\n",
-      txall ? "all" : "modified");
+    const char* cname = cmd->GetName();
+    const char* requested = "modified";
+
+    if (strcmp(cname, "all") == 0)
+      {
+      requested = "all";
+      }
+    else if (strcmp(cname, "priority") == 0)
+      {
+      requested = "priority";
+      }
+
+    MyOvmsServerV3->RequestUpdate(requested);
+    writer->printf("Server V3 data update for %s metrics has been scheduled\n", requested);
     }
   }
 
@@ -1377,6 +1444,7 @@ OvmsServerV3Init::OvmsServerV3Init()
   OvmsCommand* cmd_update = cmd_v3->RegisterCommand("update", "Request OVMS V3 Server data update", ovmsv3_update);
   cmd_update->RegisterCommand("all", "Transmit all metrics", ovmsv3_update);
   cmd_update->RegisterCommand("modified", "Transmit modified metrics only", ovmsv3_update);
+  cmd_update->RegisterCommand("priority", "Transmit priority metrics only", ovmsv3_update);
 
   using std::placeholders::_1;
   using std::placeholders::_2;

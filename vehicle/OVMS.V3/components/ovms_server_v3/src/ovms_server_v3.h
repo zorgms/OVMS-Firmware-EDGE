@@ -64,7 +64,7 @@ class OvmsServerV3 : public OvmsServer
     void NetmanStop(std::string event, void* data);
     void Ticker1(std::string event, void* data);
     void Ticker60(std::string event, void* data);
-    void RequestUpdate(bool txall);
+    void RequestUpdate(const char* requested);
     void ProcessClientMetricRequest(const std::string& clientid, const std::string& payload);
     void ProcessClientConfigRequest(const std::string& clientid, const std::string& payload);
     static bool MatchPattern(const std::string& name, const std::string& pattern);
