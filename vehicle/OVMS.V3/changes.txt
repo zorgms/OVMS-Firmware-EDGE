@@ -7,13 +7,16 @@ Open Vehicle Monitor System v3 - Change log
       TransmitModifiedMetrics(): up to 45 modified metrics per tick.
     Priority path for GPS/time metrics with optional extras:
       Default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc
-      New config: [server.v3] metrics.priority  -- space/comma separated names; supports * and prefix*.
     New update Command:
-      server v3 update priority                 -- send prioritized metrics
+      server v3 update priority                   -- send prioritized metrics
 - Webserver: Server V3 (MQTT) config page
     Added priority sending controls:
       [server.v3] updatetime.priority (bool)      -- prioritize selected metrics while the vehicle is awake, update in car on interval
-      [server.v3] metrics.priority (string)       -- space/comma separated metric names; supports * and prefix* wildcards
+      [server.v3] updatetime.immediately (bool)   -- metrics should be sent immediately when they change
+      [server.v3] metrics.priority (string)       -- comma separated metric names; supports * and prefix* wildcards
+      [server.v3] metrics.include (string)        -- comma separated metric names; supports * and prefix* wildcards
+      [server.v3] metrics.exclude (string)        -- comma separated metric names; supports * and prefix* wildcards
+      [server.v3] metrics.immediately (string)    -- comma separated metric names; supports * and prefix* wildcards
 - server V3 (additions):
     Added client on-demand requests to reduce baseline data usage:
       <prefix>/client/<clientid>/request/metric   -- payload: one or multiple metric name patterns
