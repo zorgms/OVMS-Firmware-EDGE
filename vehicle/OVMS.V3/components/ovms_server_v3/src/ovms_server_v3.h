@@ -112,6 +112,8 @@ class OvmsServerV3 : public OvmsServer
     int m_updatetime_charging;
     int m_updatetime_sendall;
     int m_updatetime_keepalive;
+    int m_max_per_call_sendall;
+    int m_max_per_call_modified;
     bool m_updatetime_priority;
     bool m_legacy_event_topic;
     bool m_updatetime_immediately;

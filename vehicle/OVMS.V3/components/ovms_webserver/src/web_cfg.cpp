@@ -1599,6 +1599,7 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
   std::string updatetime_connected, updatetime_idle, updatetime_on;
   std::string updatetime_charging, updatetime_awake, updatetime_sendall, updatetime_keepalive;
   std::string metrics_priority, metrics_include, metrics_exclude, metrics_immediately;
+  std::string queue_sendall, queue_modified;
   bool tls, legacy_event_topic, updatetime_priority, updatetime_immediately;
 
   if (c.method == "POST") {
@@ -1623,6 +1624,8 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     metrics_include = c.getvar("metrics_include");
     metrics_exclude = c.getvar("metrics_exclude");
     metrics_immediately = c.getvar("metrics_immediately");
+    queue_sendall = c.getvar("queue_sendall");
+    queue_modified = c.getvar("queue_modified");
 
     // validate:
     if (port != "") {
@@ -1690,6 +1693,8 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
       MyConfig.SetParamValue("server.v3", "metrics.include", metrics_include);
       MyConfig.SetParamValue("server.v3", "metrics.exclude", metrics_exclude);
       MyConfig.SetParamValue("server.v3", "metrics.immediately", metrics_immediately);
+      MyConfig.SetParamValue("server.v3", "queue.sendall", queue_sendall);
+      MyConfig.SetParamValue("server.v3", "queue.modified", queue_modified);
 
       c.head(200);
       c.alert("success", "<p class=\"lead\">Server V3 (MQTT) connection configured.</p>");
@@ -1725,6 +1730,8 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
     metrics_include = MyConfig.GetParamValue("server.v3", "metrics.include");
     metrics_exclude = MyConfig.GetParamValue("server.v3", "metrics.exclude");
     metrics_immediately = MyConfig.GetParamValue("server.v3", "metrics.immediately");
+    queue_sendall = MyConfig.GetParamValue("server.v3", "queue.sendall");
+    queue_modified = MyConfig.GetParamValue("server.v3", "queue.modified");
 
     // generate form:
     c.head(200);
@@ -1776,6 +1783,9 @@ void OvmsWebServer::HandleCfgServerV3(PageEntry_t& p, PageContext_t& c)
   c.input_checkbox("Update metrics immediately", "updatetime_immediately", updatetime_immediately,
     "<p>Metrics should be sent immediately when they change.</p>"
     "<p><strong>Note:</strong> This setting significantly increases data transfer!</p>");
+  c.input("number", "queue size sendall", "queue_sendall", queue_sendall.c_str(), "default: 30", "default: 30", "min=\"1\" max=\"200\" step=\"1\"", "size");
+  c.input("number", "queue size modified", "queue_modified", queue_modified.c_str(), "default: 40", "default: 40", "min=\"1\" max=\"300\" step=\"1\"", "size");
+  c.input("number", "…sendall", "updatetime_sendall", updatetime_sendall.c_str(), "default: 1200", "default: 1200", "min=\"60\" max=\"3600\" step=\"1\"", "seconds");
   c.input_text("priority metrics", "metrics_priority", metrics_priority.c_str(), NULL,
     "<p>default priority: v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc</br>"
     "additional comma-separated list of metrics to prioritize when Car is awake, wildcard supported e.g. v.c.*, m.net.*</p>");

@@ -17,6 +17,8 @@ Open Vehicle Monitor System v3 - Change log
       [server.v3] metrics.include (string)        -- comma separated metric names; supports * and prefix* wildcards
       [server.v3] metrics.exclude (string)        -- comma separated metric names; supports * and prefix* wildcards
       [server.v3] metrics.immediately (string)    -- comma separated metric names; supports * and prefix* wildcards
+      [server.v3] queue.sendall (int)             -- queue size send 'sendall' metrics
+      [server.v3] queue.modified (int)            -- queue size send 'modified' metrics
 - server V3 (additions):
     Added client on-demand requests to reduce baseline data usage:
       <prefix>/client/<clientid>/request/metric   -- payload: one or multiple metric name patterns

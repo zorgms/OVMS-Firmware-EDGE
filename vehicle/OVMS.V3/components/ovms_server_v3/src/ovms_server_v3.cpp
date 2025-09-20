@@ -33,21 +33,28 @@ static const char *TAG = "ovms-server-v3";
 
 #include <string.h>
 #include <stdint.h>
+#include <vector>
+#include <algorithm>
 #include "ovms_server_v3.h"
 #include "buffered_shell.h"
 #include "ovms_command.h"
 #include "ovms_metrics.h"
 #include "metrics_standard.h"
 #include "esp_system.h"              // <- for esp_random() (jitter)
-#include <vector>
 #include "id_filter.h"               // <- use IdFilter for pattern matching
 #if CONFIG_MG_ENABLE_SSL
-#include "ovms_tls.h"
+  #include "ovms_tls.h"
 #endif
 
 OvmsServerV3 *MyOvmsServerV3 = NULL;
 size_t MyOvmsServerV3Modifier = 0;
 size_t MyOvmsServerV3Reader = 0;
+
+// Optional weak C-linkage hook provided by the webserver component.
+// If implemented, Server V3 can query current WebSocket TX queue stats (used/free/capacity)
+// to dynamically throttle MQTT metric bursts. If not linked (no webserver or no hook),
+// the symbol resolves to null and this feature is skipped, avoiding a hard module dependency.
+extern "C" bool ovms_webserver_ws_queue_stats(size_t* used, size_t* free, size_t* capacity) __attribute__((weak));
 
 bool OvmsServerV3ReaderCallback(OvmsNotifyType* type, OvmsNotifyEntry* entry)
   {
@@ -221,11 +228,13 @@ OvmsServerV3::OvmsServerV3(const char* name)
   m_notify_data_waittype = NULL;
   m_notify_data_waitentry = NULL;
   m_connection_available = false;
-  m_conn_stable_wait = 10;      // seconds network must be stable before first connect
-  m_conn_jitter_max  = 5;       // max random extra seconds
-  m_connect_jitter   = -1;      // -1 = not yet chosen
+  m_conn_stable_wait = 10;          // seconds network must be stable before first connect
+  m_conn_jitter_max  = 5;           // max random extra seconds
+  m_connect_jitter   = -1;          // -1 = not yet chosen
   m_updatetime_priority = false;
   m_updatetime_immediately = false;
+  m_max_per_call_sendall = 30;      // max messages to send per Ticker1 call in sendall mode, default 30
+  m_max_per_call_modified = 40;     // max messages to send per Ticker1 call in modified mode, default 40
 
   ESP_LOGI(TAG, "OVMS Server v3 running");
 
@@ -288,10 +297,41 @@ OvmsServerV3::~OvmsServerV3()
   MyEvents.SignalEvent("server.v3.stopped", NULL);
   }
 
+/**
+ * ovmsv3_calc_budget
+ * Purpose:
+ *   Derive the per-tick send budget for MQTT metric publishing.
+ *   Starts from the configured base_budget and, if available, limits
+ *   it to the number of free slots in the WebSocket TX queue to avoid
+ *   overflowing the UI update pipeline.
+ *
+ * Guarantees:
+ *   - Always returns at least 1.
+ *   - No hard dependency on the webserver component (weak symbol).
+ */
+static int ovmsv3_calc_budget(int base_budget)
+  {
+    int budget = base_budget;
+
+  #if defined(CONFIG_OVMS_COMP_WEBSERVER)
+    // Use WebSocket queue stats if the hook is provided by the webserver:
+    if (ovms_webserver_ws_queue_stats) {
+      size_t used = 0, free_slots = 0, cap = 0;
+      if (ovms_webserver_ws_queue_stats(&used, &free_slots, &cap)) {
+        if ((int)free_slots > 0)
+          budget = std::min(budget, (int)free_slots);
+        else
+          budget = 1; // never return 0
+      }
+    }
+  #endif
+    if (budget < 1) budget = 1;
+    return budget;
+  }
+
 void OvmsServerV3::TransmitAllMetrics()
   {
   static size_t s_next_index = 0;
-  const int MAX_PER_CALL = 40;
 
   OvmsMutexLock mg(&m_mgconn_mutex);
   if (!m_mgconn)
@@ -318,17 +358,29 @@ void OvmsServerV3::TransmitAllMetrics()
     }
 
   int sent = 0;
-  while (m && sent < MAX_PER_CALL)
+  while (m)
     {
     OvmsMetric* cur = m;
     m = m->m_next;
 
-    cur->ClearModified(MyOvmsServerV3Modifier);
-    // (TransmitMetric() itself applies include/exclude filters)
-    TransmitMetric(cur);
+    // Only count into budget if metric is included:
+    const std::string name(cur->m_name);
+    const bool included = m_metrics_filter.CheckFilter(name);
 
-    sent++;
+    // Clear our modified slot for full-sync pass:
+    cur->ClearModified(MyOvmsServerV3Modifier);
+
+    if (included)
+      {
+      TransmitMetric(cur); // applies filter again internally, harmless
+      sent++;
+      }
+
     s_next_index++;
+    // Dynamically recalc budget each iteration to react to queue pressure:
+    int MAX_PER_CALL = ovmsv3_calc_budget(m_max_per_call_sendall) - 10;
+    if (sent >= MAX_PER_CALL)
+      break;
     }
 
   if (!m)
@@ -346,7 +398,6 @@ void OvmsServerV3::TransmitAllMetrics()
 void OvmsServerV3::TransmitModifiedMetrics()
   {
   static size_t s_mod_next_index = 0;
-  const int MAX_PER_CALL = 45; // Slightly larger than “all” chunk (tune as needed)
 
   OvmsMutexLock mg(&m_mgconn_mutex);
   if (!m_mgconn)
@@ -373,12 +424,11 @@ void OvmsServerV3::TransmitModifiedMetrics()
     }
 
   int sent = 0;
-  while (m && sent < MAX_PER_CALL)
+  while (m)
     {
     OvmsMetric* cur = m;
     m = m->m_next;
-
-    // Check & clear modification flag atomically for our modifier slot:
+    // Check & clear modification flag for our modifier slot.
     if (cur->IsModifiedAndClear(MyOvmsServerV3Modifier))
       {
       TransmitMetric(cur);
@@ -386,6 +436,11 @@ void OvmsServerV3::TransmitModifiedMetrics()
       }
     // Advance scan position regardless of modification:
     s_mod_next_index++;
+
+    // Dynamically recalculate MAX_PER_CALL on each iteration
+    int MAX_PER_CALL = ovmsv3_calc_budget(m_max_per_call_modified) - 10;
+    if (sent >= MAX_PER_CALL)
+      break;
     }
 
   if (!m)
@@ -1049,6 +1104,10 @@ void OvmsServerV3::ConfigChanged(OvmsConfigParam* param)
   m_legacy_event_topic = MyConfig.GetParamValueBool("server.v3", "events.legacy_topic", true);
   m_updatetime_priority = MyConfig.GetParamValueBool("server.v3", "updatetime.priority", false);
   m_updatetime_immediately = MyConfig.GetParamValueBool("server.v3", "updatetime.immediately", false);
+  m_max_per_call_sendall = MyConfig.GetParamValueInt("server.v3", "queue.sendall", m_max_per_call_sendall);
+  if (m_max_per_call_sendall < 1) m_max_per_call_sendall = 1;
+  m_max_per_call_modified = MyConfig.GetParamValueInt("server.v3", "queue.modified", m_max_per_call_modified);
+  if (m_max_per_call_modified < 1) m_max_per_call_modified = 1;
 
   const char* exclude_immediate = "v.p.latitude, v.p.longitude, v.p.altitude, v.p.speed, v.p.gpsspeed, m.time.utc,"
                                "v.c.time, v.e.drivetime, m.monotonic, v.e.parktime, m.net.wifi.sq, m.net.sq, m.net.mdm.sq," 
