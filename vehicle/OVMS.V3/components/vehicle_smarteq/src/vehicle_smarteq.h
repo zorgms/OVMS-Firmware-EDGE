@@ -27,23 +27,39 @@
  ; THE SOFTWARE.
  ;
  ; Most of the CAN Messages are based on https://github.com/MyLab-odyssey/ED_BMSdiag
+ ; https://github.com/MyLab-odyssey/ED4scan
  */
 
 #ifndef __VEHICLE_SMARTEQ_H__
 #define __VEHICLE_SMARTEQ_H__
 
-#include <atomic>
-#include <stdint.h>
-#include <deque>
-#include "can.h"
-#include "vehicle.h"
+#define VERSION "2.0.0"
 
 #include "ovms_log.h"
+
+#include <deque>
+#include <string>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <cmath>
+
+#include <stdint.h>
+#include <stdio.h>
+#include <sdkconfig.h>
+
+#include "can.h"
+#include "vehicle.h"
+#include "metrics_standard.h"
+
 #include "ovms_config.h"
 #include "ovms_metrics.h"
 #include "ovms_command.h"
-#include "freertos/timers.h"
-#include "esp_timer.h"
+#include "ovms_events.h"
+#include "ovms_notify.h"
+#include "ovms_peripherals.h"
+#include "ovms_time.h"
+
 #ifdef CONFIG_OVMS_COMP_WEBSERVER
 #include "ovms_webserver.h"
 #endif
@@ -94,7 +110,6 @@ class OvmsVehicleSmartEQ : public OvmsVehicle
     void TimeCheckTask();
     void Check12vState();
     void TimeBasedClimateData();
-    void CheckV2State();
     void DisablePlugin(const char* plugin);
     void ModemNetworkType();
     bool ExecuteCommand(const std::string& command);
@@ -149,6 +164,7 @@ public:
     static void WebCfgFeatures(PageEntry_t& p, PageContext_t& c);
     static void WebCfgClimate(PageEntry_t& p, PageContext_t& c);
     static void WebCfgTPMS(PageEntry_t& p, PageContext_t& c);
+    static void WebCfgADC(PageEntry_t& p, PageContext_t& c);
     static void WebCfgBattery(PageEntry_t& p, PageContext_t& c);
 #endif
     void ConfigChanged(OvmsConfigParam* param) override;
@@ -174,6 +190,9 @@ public:
     bool m_charge_start;
     bool m_charge_finished;
     float m_tpms_pressure[4]; // kPa
+    float m_tpms_temperature[4]; // °C
+    bool m_tpms_lowbatt[4]; // 0=ok, 1=low
+    bool m_tpms_missing_tx[4]; // 0=ok, 1=missing
     int m_tpms_index[4];
     bool m_ADCfactor_recalc;       // request recalculation of ADC factor
     int m_ADCfactor_recalc_timer;  // countdown timer for ADC factor recalculation
@@ -203,6 +222,12 @@ public:
     void PollReply_EVC_DCDC_Power(const char* data, uint16_t reply_len);
     void PollReply_EVC_ext_power(const char* data, uint16_t reply_len);
     void PollReply_EVC_plug_present(const char* data, uint16_t reply_len);
+    void PollReply_EVC_WakeUpType(const char* data, uint16_t reply_len);
+    void PollReply_EVC_USM14VVoltage(const char* data, uint16_t reply_len);
+    void PollReply_EVC_14VBatteryVoltage(const char* data, uint16_t reply_len);
+    void PollReply_EVC_14VBatteryAlert(const char* data, uint16_t reply_len);
+    void PollReply_EVC_14VBatteryVoltageReq(const char* data, uint16_t reply_len);
+    void PollReply_EVC_ParkingDuration(const char* data, uint16_t reply_len);
     void PollReply_OBL_ChargerAC(const char* data, uint16_t reply_len);
     void PollReply_OBL_JB2AC_Ph1_RMS_A(const char* data, uint16_t reply_len);
     void PollReply_OBL_JB2AC_Ph2_RMS_A(const char* data, uint16_t reply_len);
@@ -225,12 +250,14 @@ public:
     void PollReply_OBL_JB2AC_HFCurrent(const char* data, uint16_t reply_len);
     void PollReply_OBL_JB2AC_LFCurrent(const char* data, uint16_t reply_len);
     void PollReply_OBL_JB2AC_MaxCurrent(const char* data, uint16_t reply_len);
+    void PollReply_TPMS_InputCapt(const char* data, uint16_t reply_len);
+    void PollReply_TPMS_Status(const char* data, uint16_t reply_len);
 
   protected:
     bool m_enable_write;                    // canwrite
     bool m_enable_LED_state;                // Online LED State
     bool m_enable_lock_state;               // Lock State
-    bool m_ios_tpms_fix;                    // IOS TPMS Display Fix
+    bool m_tpms_temp_enable;                // TPMS Temperature Display enabled
     bool m_resettrip;                       // Reset Trip Values when Charging/Driving
     bool m_resettotal;                      // Reset kWh/100km Values when Driving
     bool m_tripnotify;                      // Trip Reset Notification on/off
@@ -254,7 +281,7 @@ public:
     std::string m_network_type_ls;          //!< Network type last state reminder
     bool m_extendedStats;                   //!< extended stats for trip and maintenance data
     std::deque<float> m_adc_factor_history; // ring buffer (max 20) for ADC factors
-
+    
     #define DEFAULT_BATTERY_CAPACITY 17600
     #define MAX_POLL_DATA_LEN 126
     #define CELLCOUNT 96
@@ -287,8 +314,18 @@ public:
     OvmsMetricFloat         *mt_evc_LV_DCDC_volt;       //!< voltage in V of DC/DC output of LV system, not 12V battery!
     OvmsMetricFloat         *mt_evc_LV_DCDC_power;      //!< power in W (x/10) of DC/DC output of LV system, not 12V battery!
     OvmsMetricInt           *mt_evc_LV_DCDC_state;      //!< DC/DC state
+    OvmsMetricString        *mt_evc_LV_DCDC_state_txt;  //!< DC/DC state text
     OvmsMetricBool          *mt_evc_ext_power;          //!< indicates ext power supply
+    OvmsMetricString        *mt_evc_ext_power_txt;      //!< indicates ext power supply text
     OvmsMetricBool          *mt_evc_plug_present;       //!< charging plug present
+    OvmsMetricInt           *mt_evc_wakeup_type;        //!< BCM wake up type (0=customer,1=system)
+    OvmsMetricString        *mt_evc_wakeup_type_txt;    //!< BCM wake up type text
+    OvmsMetricFloat         *mt_evc_LV_USM_volt;        //!< USM 14V voltage (CAN)
+    OvmsMetricFloat         *mt_evc_LV_batt_voltage_can; //!< 14V battery voltage (CAN)
+    OvmsMetricInt           *mt_evc_LV_batt_alert;      //!< Battery change alert level
+    OvmsMetricString        *mt_evc_LV_batt_alert_txt;  //!< Battery change alert text
+    OvmsMetricFloat         *mt_evc_LV_batt_voltage_req; //!< Internal requested 14V
+    OvmsMetricInt           *mt_evc_parking_duration_min; //!< Time since parked (SCH, minutes)
 
     OvmsMetricVector<float> *mt_bms_temps;              // BMS temperatures
     OvmsMetricFloat         *mt_bms_CV_Range_min;       //!< minimum cell voltage in V, no offset
@@ -354,13 +391,16 @@ public:
     OvmsMetricInt           *mt_climate_de;             //!< climate day end
     OvmsMetricInt           *mt_climate_1to3;           //!< climate one to three (homelink 0-2) times in following time
     OvmsMetricString        *mt_climate_data;           //!< climate data from app/website
+
+    OvmsMetricVector<float> *mt_tpms_temp;              // 4 wheel temperatures (°C)
+    OvmsMetricVector<float> *mt_tpms_pressure;          // 4 wheel pressures (kPa)
+    OvmsMetricVector<bool>  *mt_tpms_low_batt;          // 4 wheel low battery flags (0=ok, 1=low)
+    OvmsMetricVector<bool>  *mt_tpms_missing_tx;        // 4 wheel missing transmitter flags (0=ok, 1=missing)
     
   protected:
     bool m_climate_start;
     bool m_climate_start_day;
-    bool m_climate_init;                    //!< climate init after boot
-    bool m_v2_restart;
-    bool m_v2_check;
+    bool m_climate_init;                      //!< climate init after boot
     bool m_indicator;                       //!< activate indicator e.g. 7 times or whatever
     bool m_ddt4all;                         //!< DDT4ALL mode
     bool m_warning_unlocked;                //!< unlocked warning
@@ -368,13 +408,11 @@ public:
     bool m_modem_restart;                   //!< modem restart enabled
     bool m_notifySOClimit;                  //!< notify SOClimit reached one time
     bool m_enable_calcADCfactor;            //!< enable calculation of ADC factor
-    float m_12v_measured_BMS_offset;       //!< 12V battery voltage measure offset BMS <> 12V System in V
     int m_ddt4all_ticker;                   //!< DDT4ALL active ticker 
     int m_ddt4all_exec;                     //!< DDT4ALL ticker for next execution
     int m_led_state;
     int m_climate_ticker;
     int m_12v_ticker;
-    int m_v2_ticker;
     int m_modem_ticker;
     int m_park_timeout_secs;                //!< parking timeout in seconds
     
