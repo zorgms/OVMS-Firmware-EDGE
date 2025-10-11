@@ -281,11 +281,11 @@ public:
     std::string m_network_type_ls;          //!< Network type last state reminder
     bool m_extendedStats;                   //!< extended stats for trip and maintenance data
     std::deque<float> m_adc_factor_history; // ring buffer (max 20) for ADC factors
-    
-    #define DEFAULT_BATTERY_CAPACITY 17600
+
+    #define DEFAULT_BATTERY_CAPACITY 16700 // <- net 16700 Wh, gross 17600 Wh
     #define MAX_POLL_DATA_LEN 126
     #define CELLCOUNT 96
-    #define SQ_CANDATA_TIMEOUT 10
+    #define SQ_CANDATA_TIMEOUT 10 // seconds until car goes to sleep without CAN activity
 
   protected:
     std::string   m_rxbuf;

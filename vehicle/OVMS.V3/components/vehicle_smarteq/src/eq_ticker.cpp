@@ -45,7 +45,6 @@ void OvmsVehicleSmartEQ::Ticker1(uint32_t ticker)
       ESP_LOGI(TAG,"Car has gone to sleep (CAN bus timeout)");
       mt_bus_awake->SetValue(false);
       m_candata_poll = 0;
-      // PollSetState(0);
       }
     }
 
@@ -154,7 +153,7 @@ void OvmsVehicleSmartEQ::Ticker60(uint32_t ticker) {
 void OvmsVehicleSmartEQ::PollerStateTicker(canbus *bus) 
   {
   bool car_online = mt_bus_awake->AsBool();
-  bool lv_pwrstate = (StdMetrics.ms_v_bat_12v_voltage->AsFloat(0) > 12.8);
+  bool lv_pwrstate = (StdMetrics.ms_v_bat_12v_voltage->AsFloat(0) > 13.4);
   
   // - base system is awake if we've got a fresh lv_pwrstate:
   StdMetrics.ms_v_env_aux12v->SetValue(car_online);

@@ -269,7 +269,7 @@ void OvmsVehicleSmartEQ::IncomingPollReply(const OvmsPoller::poll_job_t &job, ui
           PollReply_VehicleState(m_rxbuf.data(), m_rxbuf.size());
           break;
         case 0x605e: // rq_UNDERHOOD_OPENED
-          //PollReply_DoorUnderhoodOpened(m_rxbuf.data(), m_rxbuf.size());
+          PollReply_DoorUnderhoodOpened(m_rxbuf.data(), m_rxbuf.size());
           break;
       }
       break;
@@ -518,18 +518,14 @@ void OvmsVehicleSmartEQ::PollReply_HVAC(const char* data, uint16_t reply_len) {
 }
 
 void OvmsVehicleSmartEQ::PollReply_TDB(const char* data, uint16_t reply_len) {
-  REQUIRE_LEN(5);             // minimal sanity
-  float temp = (float)(CAN_UINT(2)) > 400.0f ? 
-    (float)(CAN_UINT(2) - 400.0f) * 0.1f : 
-    (float)(400.0f - CAN_UINT(2)) * -0.1f;
+  REQUIRE_LEN(4);
+  const int raw = static_cast<int>(CAN_UINT(2));
+  const float temp = (raw - 400) * 0.1f;
 
-  static const float MAX_VALID_TEMP = 100.0f;
-  static const float MIN_VALID_TEMP = -50.0f;
+  constexpr float MAX_VALID_TEMP = 100.0f;
+  constexpr float MIN_VALID_TEMP = -50.0f;
   if (temp > MIN_VALID_TEMP && temp < MAX_VALID_TEMP) {
-      StdMetrics.ms_v_env_temp->SetValue(temp);
-      //ESP_LOGV(TAG, "Ambient temperature updated: %.1f°C", temp);
-  } else {
-      ESP_LOGW(TAG, "Invalid temperature reading ignored: %.1f°C", temp);
+    StdMetrics.ms_v_env_temp->SetValue(temp);
   }
 }
 
@@ -605,7 +601,7 @@ void OvmsVehicleSmartEQ::PollReply_VehicleState(const char* data, uint16_t reply
   }
   mt_vehicle_state->SetValue(msgtxt);
   mt_vehicle_state_code->SetValue(code);
-  //mt_bus_awake->SetValue(code > 0);
+  //StdMetrics.ms_v_env_awake->SetValue(code > 0);
 }
 
 void OvmsVehicleSmartEQ::PollReply_DoorUnderhoodOpened(const char* data, uint16_t reply_len) {
@@ -643,6 +639,7 @@ void OvmsVehicleSmartEQ::PollReply_EVC_DCDC_State(const char* data, uint16_t rep
   }
   mt_evc_LV_DCDC_state->SetValue(state);
   mt_evc_LV_DCDC_state_txt->SetValue(txt);
+  StdMetrics.ms_v_env_charging12v->SetValue(state > 1);
 }
 
 void OvmsVehicleSmartEQ::PollReply_EVC_DCDC_Load(const char* data, uint16_t reply_len) {
@@ -776,7 +773,7 @@ void OvmsVehicleSmartEQ::PollReply_EVC_14VBatteryVoltageReq(const char* data, ui
 
 void OvmsVehicleSmartEQ::PollReply_EVC_ParkingDuration(const char* data, uint16_t reply_len) {
   // POSITIVE RESPONSE FORMAT: 62 34 31 <Byte> <Byte> <Byte> <Byte>
-  REQUIRE_LEN(4);
+  REQUIRE_LEN(3);
   uint32_t raw = CAN_UINT32(0);
   // Interpret as unsigned int32 (two's complement)
   // with offset of 2147483648 (2^31) to get range -2147483648 .. +2147483647
@@ -1023,15 +1020,9 @@ void OvmsVehicleSmartEQ::PollReply_obd_mt_level(const char* data, uint16_t reply
     {
     txt = "Service A";
     }
-  else if (value == 1) 
+  else
     {
     txt = "Service B";
-    } 
-  else 
-    {
-    std::ostringstream oss;
-    oss << "Unknown " << value;
-    txt = oss.str();
     }
   mt_obd_mt_level->SetValue(txt.c_str());
   StdMetrics.ms_v_gen_substate->SetValue(txt.c_str());

@@ -49,6 +49,7 @@ void OvmsVehicleSmartEQ::IncomingFrameCan1(CAN_frame_t* p_frame) {
   
   static bool isCharging = false;
   static bool lastCharging = false;
+  bool _bool = false;
   float _range_est;
   float _bat_temp;
   float _full_km;
@@ -63,7 +64,7 @@ void OvmsVehicleSmartEQ::IncomingFrameCan1(CAN_frame_t* p_frame) {
     ESP_LOGI(TAG,"Car has woken (CAN bus activity)");
     mt_bus_awake->SetValue(true);
     m_candata_poll = 1;
-  }
+    }
   m_candata_timer = SQ_CANDATA_TIMEOUT;
   
   switch (p_frame->MsgID) {
@@ -92,7 +93,16 @@ void OvmsVehicleSmartEQ::IncomingFrameCan1(CAN_frame_t* p_frame) {
     }
     case 0x350:
       REQ_DLC(7);
+      _bool = CAN_BYTE(0) > 0xc0;
       StdMetrics.ms_v_env_locked->SetValue((CAN_BYTE(6) == 0x96));
+      StdMetrics.ms_v_env_awake->SetValue(_bool);
+      if (_bool && !mt_bus_awake->AsBool())
+        {
+        ESP_LOGI(TAG,"Car has woken (CAN bus activity)");
+        mt_bus_awake->SetValue(true);
+        m_candata_poll = 1;
+        }
+      vehicle_smart_car_on((CAN_BYTE(0) == 0xc7)); // Drive Ready
       break;
     case 0x392:
       REQ_DLC(6);
@@ -113,7 +123,7 @@ void OvmsVehicleSmartEQ::IncomingFrameCan1(CAN_frame_t* p_frame) {
     case 0x4F8:
       REQ_DLC(3);
       StdMetrics.ms_v_env_handbrake->SetValue((CAN_BYTE(0) & 0x08) > 0);
-      StdMetrics.ms_v_env_awake->SetValue((CAN_BYTE(0) & 0x40) > 0); // Ignition on
+      //StdMetrics.ms_v_env_awake->SetValue((CAN_BYTE(0) & 0x40) > 0); // Ignition on
       break;
     case 0x5D7: // Speed, ODO
       REQ_DLC(6);
@@ -212,11 +222,12 @@ void OvmsVehicleSmartEQ::IncomingFrameCan1(CAN_frame_t* p_frame) {
       }
       lastCharging = isCharging;
       break;
-    case 0x668:
+
+    /*case 0x668:
       REQ_DLC(1);
       vehicle_smart_car_on((CAN_BYTE(0) & 0x40) > 0); // Drive Ready
       break;
-    /*case 0x673:  // TPMS status -> PollReply_TPMS_InputCapt
+      case 0x673:  // TPMS status -> PollReply_TPMS_InputCapt
       REQ_DLC(2);
       // Read TPMS pressure values:
       for (int i = 0; i < 4; i++) 
