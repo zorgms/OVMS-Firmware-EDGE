@@ -59,8 +59,9 @@ static const char *TAG = "ota";
 #include "ovms_version.h"
 #include "crypt_md5.h"
 #include "ovms_vfs.h"
+#include "ovms_malloc.h"
 
-#define OTA_BUF_SIZE 8192  // buffer size for OTA download to SD card
+#define OTA_BUF_SIZE 8192               // buffer size for OTA download to SD card
 #define OTA_MIN_IMG_SIZE (2*1024*1024)  // expected min. 2MB firmware image size
 OvmsOTA MyOTA __attribute__ ((init_priority (4400)));
 
@@ -70,7 +71,7 @@ OvmsOTA MyOTA __attribute__ ((init_priority (4400)));
 #ifdef CONFIG_OVMS_COMP_SDCARD
 /**
  * CheckSDFreeSpace: check if SD card has enough free space.
- * Includes a configurable spare reserve (ota > min.sd.space, in MB, default 50)
+ * Includes a configurable spare reserve (ota > sd.minspace, in MB, default 50)
  * to leave headroom for logs, CAN traces and other data on the SD card.
  * @param needed    minimum bytes required for the download
  * @param writer    optional OvmsWriter for user output (may be NULL)
@@ -85,7 +86,7 @@ static bool CheckSDFreeSpace(size_t needed, OvmsWriter* writer)
     int sector_size = (MyPeripherals->m_sdcard && MyPeripherals->m_sdcard->m_card)
                     ? MyPeripherals->m_sdcard->m_card->csd.sector_size : 512;
     uint64_t free_bytes = (uint64_t)fre_clust * fs->csize * sector_size;
-    int spare_mb = MyConfig.GetParamValueInt("ota", "min.sd.space", 50);
+    int spare_mb = MyConfig.GetParamValueInt("ota", "sd.minspace", 50);
     uint64_t spare_bytes = (uint64_t)spare_mb * 1024 * 1024;
     uint64_t required = (uint64_t)needed + spare_bytes;
     if (writer)
@@ -598,7 +599,7 @@ bool OvmsOTA::AutoFlashSD()
     }
 
   SetFlashStatus("OTA Auto Flash SD: Flashing image paritition...",0,true);
-  char* buf = (char*)malloc(OTA_BUF_SIZE);
+  char* buf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
   if (buf == NULL)
     {
     ClearFlashStatus();
@@ -646,7 +647,7 @@ bool OvmsOTA::AutoFlashSD()
     }
 
   char done_path[40];
-  snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s.done", target->label);
+  snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s", target->label);
   remove(done_path);
   if (rename("/sd/ovms3.bin", done_path) != 0)
     {
@@ -1129,7 +1130,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     }
   setvbuf(f, NULL, _IOFBF, 4096);
 
-  uint8_t* rbuf = (uint8_t*)malloc(OTA_BUF_SIZE);
+  uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(OTA_BUF_SIZE);
   if (rbuf == NULL)
     {
     ClearFlashStatus();
@@ -1204,7 +1205,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     return false;
     }
 
-  char* fbuf = (char*)malloc(OTA_BUF_SIZE);
+  char* fbuf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
   if (fbuf == NULL)
     {
     ClearFlashStatus();
@@ -1252,7 +1253,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     }
 
   char done_path[40];
-  snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s.done", target->label);
+  snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s", target->label);
   remove(done_path);
   rename("/sd/ovms3.bin", done_path);
 
@@ -1460,7 +1461,7 @@ bool OvmsOTA::AutoFlash(bool force)
     if (f != NULL)
       {
       setvbuf(f, NULL, _IOFBF, 4096);
-      uint8_t* rbuf = (uint8_t*)malloc(OTA_BUF_SIZE);
+      uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(OTA_BUF_SIZE);
       if (rbuf == NULL)
         {
         ESP_LOGE(TAG, "AutoFlash: Cannot allocate download buffer");
@@ -1526,7 +1527,7 @@ bool OvmsOTA::AutoFlash(bool force)
             return false;
             }
 
-          char* fbuf = (char*)malloc(OTA_BUF_SIZE);
+          char* fbuf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
           if (fbuf == NULL)
             {
             ClearFlashStatus();
@@ -1574,7 +1575,7 @@ bool OvmsOTA::AutoFlash(bool force)
             }
 
           char done_path[40];
-          snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s.done", target->label);
+          snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s", target->label);
           remove(done_path);
           rename("/sd/ovms3.bin", done_path);
 
