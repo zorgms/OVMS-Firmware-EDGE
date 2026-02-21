@@ -265,7 +265,8 @@ void OvmsWebServer::HandleCfgFirmware(PageEntry_t& p, PageContext_t& c)
 
   c.input_button("default", "Flash now", "action", "flash-http");
 #ifdef CONFIG_OVMS_COMP_SDCARD
-  c.input_button("default", "Download to SD &amp; Flash", "action", "flash-sd");
+  if(path_exists("/sd"))
+    c.input_button("default", "Download to SD &amp; Flash", "action", "flash-sd");
 #endif // #ifdef CONFIG_OVMS_COMP_SDCARD
   c.form_end();
 

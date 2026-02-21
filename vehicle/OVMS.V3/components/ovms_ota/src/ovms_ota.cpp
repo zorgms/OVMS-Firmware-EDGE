@@ -61,6 +61,7 @@ static const char *TAG = "ota";
 #include "ovms_vfs.h"
 
 #define OTA_BUF_SIZE 8192  // buffer size for OTA download to SD card
+#define OTA_MIN_IMG_SIZE (2*1024*1024)  // expected min. 2MB firmware image size
 OvmsOTA MyOTA __attribute__ ((init_priority (4400)));
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -203,6 +204,11 @@ void ota_flash_sd(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc,
   if (MyOTA.m_autotask != NULL)
     {
     writer->puts("Error: Flash operation already in progress");
+    return;
+    }
+  if(!path_exists("/sd"))
+    {
+    writer->puts("Error: SD card not mounted");
     return;
     }
 
@@ -971,7 +977,7 @@ bool OvmsOTA::FlashHTTP(const std::string& url)
     }
 
   size_t expected = http.BodySize();
-  if (expected < 32)
+  if (expected < OTA_MIN_IMG_SIZE)
     {
     ClearFlashStatus();
     ESP_LOGE(TAG, "FlashHTTP: Expected download size (%d) is invalid", expected);
@@ -1095,7 +1101,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     }
 
   size_t expected = http.BodySize();
-  if (expected < 32)
+  if (expected < OTA_MIN_IMG_SIZE)
     {
     ClearFlashStatus();
     ESP_LOGE(TAG, "FlashSD: Expected download size (%d) is invalid", expected);
@@ -1434,7 +1440,7 @@ bool OvmsOTA::AutoFlash(bool force)
     }
 
   size_t expected = http.BodySize();
-  if (expected < 32)
+  if (expected < OTA_MIN_IMG_SIZE)
     {
     ESP_LOGE(TAG, "AutoFlash: Expected download file size (%d) is invalid", expected);
     m_lastcheckday = -1; // Allow to try again within the same day
@@ -1443,8 +1449,9 @@ bool OvmsOTA::AutoFlash(bool force)
 
   // Try SD-buffered download if configured (auto.buffer)
 #ifdef CONFIG_OVMS_COMP_SDCARD
-  if (MyConfig.GetParamValueBool("ota", "sd.buffer", false)
-      && path_exists("/sd") && CheckSDFreeSpace(expected, NULL))
+  if (MyConfig.GetParamValueBool("ota", "sd.buffer", false) && 
+      path_exists("/sd") && 
+      CheckSDFreeSpace(expected, NULL))
     {
     ESP_LOGI(TAG, "AutoFlash: Buffering download to SD card (auto.buffer)...");
     SetFlashStatus("OTA Auto Flash: Downloading to SD card...",0,true);
