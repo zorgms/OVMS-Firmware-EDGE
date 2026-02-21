@@ -61,7 +61,8 @@ static const char *TAG = "ota";
 #include "ovms_vfs.h"
 #include "ovms_malloc.h"
 
-#define OTA_BUF_SIZE 8192               // buffer size for OTA download to SD card
+#define SD_WRITE_BUF_SIZE 4096          // buffer size for SD write operations in internal RAM - setvbuf
+#define EXT_RAM_BUF_SIZE 8192           // buffer size for OTA operations in external RAM - ExternalRamMalloc
 #define OTA_MIN_IMG_SIZE (2*1024*1024)  // expected min. 2MB firmware image size
 OvmsOTA MyOTA __attribute__ ((init_priority (4400)));
 
@@ -542,7 +543,7 @@ bool OvmsOTA::AutoFlashSD()
   {
   FILE* f = fopen("/sd/ovms3.bin", "r");
   if (f == NULL) return false;
-  setvbuf(f, NULL, _IOFBF, 4096);
+  setvbuf(f, NULL, _IOFBF, SD_WRITE_BUF_SIZE);
 
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *target = esp_ota_get_next_update_partition(running);
@@ -599,7 +600,7 @@ bool OvmsOTA::AutoFlashSD()
     }
 
   SetFlashStatus("OTA Auto Flash SD: Flashing image paritition...",0,true);
-  char* buf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
+  char* buf = (char*)ExternalRamMalloc(EXT_RAM_BUF_SIZE);
   if (buf == NULL)
     {
     ClearFlashStatus();
@@ -609,7 +610,7 @@ bool OvmsOTA::AutoFlashSD()
     return false;
     }
   size_t done = 0;
-  while(size_t n = fread(buf, 1, OTA_BUF_SIZE, f))
+  while(size_t n = fread(buf, 1, EXT_RAM_BUF_SIZE, f))
     {
     err = esp_ota_write(otah, buf, n);
     if (err != ESP_OK)
@@ -1128,9 +1129,9 @@ bool OvmsOTA::FlashSD(const std::string& url)
     http.Disconnect();
     return false;
     }
-  setvbuf(f, NULL, _IOFBF, 4096);
+  setvbuf(f, NULL, _IOFBF, SD_WRITE_BUF_SIZE);
 
-  uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(OTA_BUF_SIZE);
+  uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(EXT_RAM_BUF_SIZE);
   if (rbuf == NULL)
     {
     ClearFlashStatus();
@@ -1142,7 +1143,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
   size_t filesize = 0;
   ssize_t k;
   bool dl_ok = true;
-  while ((k = http.BodyRead(rbuf,OTA_BUF_SIZE)) > 0)
+  while ((k = http.BodyRead(rbuf,EXT_RAM_BUF_SIZE)) > 0)
     {
     filesize += k;
     SetFlashPerc((filesize*50)/expected);
@@ -1192,7 +1193,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     ClearFlashStatus();
     return false;
     }
-  setvbuf(f, NULL, _IOFBF, 4096);
+  setvbuf(f, NULL, _IOFBF, SD_WRITE_BUF_SIZE);
 
   SetFlashStatus("OTA SD Flash: Preparing flash partition...");
   esp_ota_handle_t otah;
@@ -1205,7 +1206,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
     return false;
     }
 
-  char* fbuf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
+  char* fbuf = (char*)ExternalRamMalloc(EXT_RAM_BUF_SIZE);
   if (fbuf == NULL)
     {
     ClearFlashStatus();
@@ -1217,7 +1218,7 @@ bool OvmsOTA::FlashSD(const std::string& url)
 
   SetFlashStatus("OTA SD Flash: Flashing from SD card...");
   size_t done = 0;
-  while (size_t n = fread(fbuf, 1, OTA_BUF_SIZE, f))
+  while (size_t n = fread(fbuf, 1, EXT_RAM_BUF_SIZE, f))
     {
     err = esp_ota_write(otah, fbuf, n);
     if (err != ESP_OK)
@@ -1460,8 +1461,8 @@ bool OvmsOTA::AutoFlash(bool force)
     FILE *f = fopen("/sd/ovms3.bin.dl", "w");
     if (f != NULL)
       {
-      setvbuf(f, NULL, _IOFBF, 4096);
-      uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(OTA_BUF_SIZE);
+      setvbuf(f, NULL, _IOFBF, SD_WRITE_BUF_SIZE);
+      uint8_t* rbuf = (uint8_t*)ExternalRamMalloc(EXT_RAM_BUF_SIZE);
       if (rbuf == NULL)
         {
         ESP_LOGE(TAG, "AutoFlash: Cannot allocate download buffer");
@@ -1474,7 +1475,7 @@ bool OvmsOTA::AutoFlash(bool force)
       size_t filesize = 0;
       ssize_t k;
       bool dl_ok = true;
-      while ((k = http.BodyRead(rbuf,OTA_BUF_SIZE)) > 0)
+      while ((k = http.BodyRead(rbuf,EXT_RAM_BUF_SIZE)) > 0)
         {
         filesize += k;
         SetFlashPerc((filesize*50)/expected);
@@ -1514,7 +1515,7 @@ bool OvmsOTA::AutoFlash(bool force)
             m_lastcheckday = -1;
             return false;
             }
-          setvbuf(f, NULL, _IOFBF, 4096);
+          setvbuf(f, NULL, _IOFBF, SD_WRITE_BUF_SIZE);
 
           SetFlashStatus("OTA Auto Flash: Preparing flash partition...");
           esp_ota_handle_t otah;
@@ -1527,7 +1528,7 @@ bool OvmsOTA::AutoFlash(bool force)
             return false;
             }
 
-          char* fbuf = (char*)ExternalRamMalloc(OTA_BUF_SIZE);
+          char* fbuf = (char*)ExternalRamMalloc(EXT_RAM_BUF_SIZE);
           if (fbuf == NULL)
             {
             ClearFlashStatus();
@@ -1539,7 +1540,7 @@ bool OvmsOTA::AutoFlash(bool force)
 
           SetFlashStatus("OTA Auto Flash: Flashing from SD card...");
           size_t done = 0;
-          while (size_t n = fread(fbuf, 1, OTA_BUF_SIZE, f))
+          while (size_t n = fread(fbuf, 1, EXT_RAM_BUF_SIZE, f))
             {
             err = esp_ota_write(otah, fbuf, n);
             if (err != ESP_OK)
