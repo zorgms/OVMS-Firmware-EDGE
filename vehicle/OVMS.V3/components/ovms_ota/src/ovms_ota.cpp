@@ -1315,6 +1315,7 @@ static void OTAFlashTask(void *pvParameters)
     {
     if (reboot)
       {
+      MyOTA.SetFlashStatus("Flash complete, rebooting...", 100);
       MyNotify.NotifyString("info", "ota.update", "OTA flash complete, rebooting to activate");
       ESP_LOGI(TAG, "OTAFlashTask: Complete. Requesting restart...");
       // Flash has completed. We now need to reboot
@@ -1326,8 +1327,13 @@ static void OTAFlashTask(void *pvParameters)
       {
       MyNotify.NotifyString("info", "ota.update", "OTA flash complete (reboot disabled, use 'module reset' to activate)");
       ESP_LOGI(TAG, "OTAFlashTask: Flash complete (reboot disabled, use 'module reset' to activate)");
-      MyOTA.SetFlashStatus("Flash complete (reboot disabled)");
+      MyOTA.SetFlashStatus("Flash complete (reboot disabled)", 100);
       }
+    }
+  else
+    {
+    MyOTA.SetFlashStatus("Flash failed, check log for details");
+    ESP_LOGE(TAG, "OTAFlashTask: Flash operation failed");
     }
 
   MyOTA.m_autotask = NULL;
