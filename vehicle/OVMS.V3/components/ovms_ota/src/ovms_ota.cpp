@@ -61,9 +61,9 @@ static const char *TAG = "ota";
 #include "ovms_vfs.h"
 #include "ovms_malloc.h"
 
-#define TASK_MEM_SIZE 3584              // stack size for OTA flash task (in bytes)
-#define SD_WRITE_BUF_SIZE 2048          // buffer size for SD write operations in internal RAM - setvbuf
-#define EXT_RAM_BUF_SIZE 8192           // buffer size for OTA operations in external RAM - ExternalRamMalloc
+#define TASK_MEM_SIZE 4096              // stack size for OTA flash task (in bytes)
+#define SD_WRITE_BUF_SIZE 3072          // buffer size for SD write operations in internal RAM - setvbuf
+#define EXT_RAM_BUF_SIZE 65536          // buffer size for OTA operations in external RAM - ExternalRamMalloc
 #define OTA_MIN_IMG_SIZE 2097152        // expected min. 2MB firmware image size
 OvmsOTA MyOTA __attribute__ ((init_priority (4400)));
 
