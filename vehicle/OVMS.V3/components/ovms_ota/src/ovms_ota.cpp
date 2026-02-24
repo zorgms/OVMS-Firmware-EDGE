@@ -198,6 +198,21 @@ void ota_status(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, c
     writer->puts("OTA status unknown");
   }
 
+void ota_flash_status(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, const char* const* argv)
+  {
+  if (MyOTA.IsFlashStatus())
+    {
+    writer->printf("%s (%d%%)\n", MyOTA.GetFlashStatus(), MyOTA.GetFlashPerc());
+    // Clear stale status if task has already ended (e.g. reboot disabled):
+    if (MyOTA.m_autotask == NULL)
+      MyOTA.ClearFlashStatus();
+    }
+  else if (MyOTA.m_autotask != NULL)
+    writer->puts("Flash: running");
+  else
+    writer->puts("Flash: idle");
+  }
+
 void ota_flash_vfs(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, const char* const* argv)
   {
   const esp_partition_t *running = esp_ota_get_running_partition();
@@ -264,39 +279,46 @@ void ota_flash_vfs(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc
 
 void ota_flash_http(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, const char* const* argv)
   {
-  std::string url;
+  writer->puts("Triggering HTTP firmware update...");
+  MyOTA.SetFlashStatus("OTA Flash HTTP: Starting...", 0, true);
+  MyOTA.LaunchAutoFlash(OTA_FlashCfg_HTTP, argv[0]);
+  }
+
+bool OvmsOTA::FlashHTTP(const std::string& url_param /*url=""*/)
+  {
+  std::string url(url_param);
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *target = esp_ota_get_next_update_partition(running);
 
   OvmsMutexLock m_lock(&MyOTA.m_flashing,0);
   if (!m_lock.IsLocked())
     {
-    writer->puts("Error: Flash operation already in progress - cannot flash again");
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Flash operation already in progress - cannot flash again");
+    return false;
     }
 
   if (running==NULL)
     {
-    writer->puts("Error: Current running image cannot be determined - aborting");
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Current running image cannot be determined - aborting");
+    return false;
     }
-  writer->printf("Current running partition is: %s\n",running->label);
+  ESP_LOGI(TAG, "FlashHTTP: Current running partition is: %s",running->label);
 
   if (target==NULL)
     {
-    writer->puts("Error: Target partition cannot be determined - aborting");
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Target partition cannot be determined - aborting");
+    return false;
     }
-  writer->printf("Target partition is: %s\n",target->label);
+  ESP_LOGI(TAG, "FlashHTTP: Target partition is: %s",target->label);
 
   if (running == target)
     {
-    writer->puts("Error: Cannot flash to running image partition");
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Cannot flash to running image partition");
+    return false;
     }
 
   // URL
-  if (argc == 0)
+  if (url.empty())
     {
     // Automatically build the URL based on firmware
     std::string tag = MyConfig.GetParamValue("ota","tag");
@@ -316,95 +338,92 @@ void ota_flash_http(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int arg
 
     url.append("/ovms3.bin");
     }
-  else
-    {
-    url = argv[0];
-    }
-  writer->printf("Download firmware from %s to %s\n",url.c_str(),target->label);
+  ESP_LOGI(TAG, "FlashHTTP: Download firmware from %s to %s",url.c_str(),target->label);
 
   // HTTP client request...
   OvmsHttpClient http(url);
   if (!http.IsOpen())
     {
-    writer->puts("Error: Request failed");
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Request failed");
+    return false;
     }
 
   size_t expected = http.BodySize();
   if (expected < OTA_MIN_IMAGE_SIZE)
     {
-    writer->printf("Error: Expected download file size (%d bytes) is invalid\n",expected);
-    return;
+    ESP_LOGE(TAG, "FlashHTTP: Expected download file size (%d bytes) is invalid",expected);
+    return false;
     }
 
-  writer->printf("Expected file size is %d bytes\n",expected);
+  ESP_LOGI(TAG, "FlashHTTP: Expected file size is %d bytes",expected);
 
   // Allocate download buffer in PSRAM
   const size_t bufsize = OTA_BUF_SIZE;
   uint8_t *buf = (uint8_t*)ExternalRamMalloc(bufsize);
   if (buf == NULL)
     {
-    writer->puts("Error: Cannot allocate download buffer");
+    ESP_LOGE(TAG, "FlashHTTP: Cannot allocate download buffer");
     http.Disconnect();
-    return;
+    return false;
     }
 
 #ifdef CONFIG_OVMS_COMP_SDCARD
   // SD card buffering: download to SD first, then flash from file
   bool use_sd = MyConfig.GetParamValueBool("ota", "sd.buffer", false);
-  if (use_sd && !CheckSDFreeSpace(expected, writer))
+  if (use_sd && !CheckSDFreeSpace(expected, NULL))
     {
-    writer->puts("Falling back to direct flash");
+    ESP_LOGW(TAG, "FlashHTTP: SD card space insufficient, falling back to direct flash");
     use_sd = false;
     }
   if (use_sd)
     {
-    int rc = MyOTA.DownloadToSD(http, buf, bufsize, expected, writer);
+    int rc = MyOTA.DownloadToSD(http, buf, bufsize, expected, NULL);
     if (rc == 1)
       {
-      if (MyOTA.FlashPartitionFromFile("/sd/ovms3.bin", target, buf, bufsize, writer))
+      if (MyOTA.FlashPartitionFromFile("/sd/ovms3.bin", target, buf, bufsize, NULL))
         {
         char done_path[40];
         snprintf(done_path, sizeof(done_path), "/sd/ovms3.%s", target->label);
         remove(done_path);
         rename("/sd/ovms3.bin", done_path);
         MyNotify.NotifyString("info", "ota.update", "Flashed new firmware version finished");
-        writer->printf("OTA flash was successful\n  Flashed %d bytes from %s (via SD)\n  Next boot will be from '%s'\n",
+        ESP_LOGI(TAG, "FlashHTTP: OTA flash was successful. Flashed %d bytes from %s (via SD). Next boot: '%s'",
                        expected, url.c_str(), target->label);
         MyConfig.SetParamValue("ota", "http.mru", url);
+        free(buf);
+        return true;
         }
       else
         {
         remove("/sd/ovms3.bin");
         }
       free(buf);
-      return;
+      return false;
       }
     else if (rc == 0)
       {
-      writer->puts("Warning: Cannot create file on SD card - falling back to direct flash");
+      ESP_LOGW(TAG, "FlashHTTP: Cannot create file on SD card - falling back to direct flash");
       }
     else
       {
       // Download failed, HTTP consumed - cannot fallback
       free(buf);
-      return;
+      return false;
       }
     }
 #endif // CONFIG_OVMS_COMP_SDCARD
 
   // Direct HTTP-to-flash path
-  MyOTA.SetFlashStatus("OTA Flash HTTP: Preparing flash partition...");
-  writer->puts(MyOTA.GetFlashStatus());
+  MyOTA.SetFlashStatus("OTA Flash HTTP: Preparing flash partition...", 0, true);
   esp_ota_handle_t otah;
   esp_err_t err = esp_ota_begin(target, expected, &otah);
   if (err != ESP_OK)
     {
     MyOTA.ClearFlashStatus();
-    writer->printf("Error: ESP32 error #%d when starting OTA operation\n",err);
+    ESP_LOGE(TAG, "FlashHTTP: ESP32 error #%d when starting OTA operation",err);
     http.Disconnect();
     free(buf);
-    return;
+    return false;
     }
 
   // Now, process the body
@@ -419,39 +438,39 @@ void ota_flash_http(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int arg
     MyOTA.SetFlashPerc((filesize*100)/expected);
     if (sofar > PROGRESS_INTERVAL)
       {
-      writer->printf("Downloading... %d%% (%d bytes so far)\n",MyOTA.m_flashperc,filesize);
+      ESP_LOGI(TAG, "FlashHTTP: Downloading... %d%% (%d bytes so far)",MyOTA.m_flashperc,filesize);
       sofar = 0;
       }
     if (filesize > target->size)
       {
       MyOTA.ClearFlashStatus();
-      writer->printf("Error: Download firmware is bigger than available partition space - state is inconsistent\n");
+      ESP_LOGE(TAG, "FlashHTTP: Download firmware is bigger than available partition space - state is inconsistent");
       esp_ota_end(otah);
       http.Disconnect();
       free(buf);
-      return;
+      return false;
       }
     err = esp_ota_write(otah, buf, k);
     if (err != ESP_OK)
       {
       MyOTA.ClearFlashStatus();
-      writer->printf("Error: ESP32 error #%d when writing to flash - state is inconsistent\n",err);
+      ESP_LOGE(TAG, "FlashHTTP: ESP32 error #%d when writing to flash - state is inconsistent",err);
       esp_ota_end(otah);
       http.Disconnect();
       free(buf);
-      return;
+      return false;
       }
     }
   http.Disconnect();
-  writer->printf("Download %s (at %d bytes)\n",(k<0) ? "failed" : "complete",filesize);
+  ESP_LOGI(TAG, "FlashHTTP: Download %s (at %d bytes)",(k<0) ? "failed" : "complete",filesize);
 
   if (filesize != expected)
     {
     MyOTA.ClearFlashStatus();
-    writer->printf("Error: Download file size (%d) does not match expected (%d)\n",filesize,expected);
+    ESP_LOGE(TAG, "FlashHTTP: Download file size (%d) does not match expected (%d)",filesize,expected);
     esp_ota_end(otah);
     free(buf);
-    return;
+    return false;
     }
 
   MyOTA.SetFlashStatus("OTA Flash HTTP: Finalising flash write");
@@ -459,28 +478,28 @@ void ota_flash_http(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int arg
   if (err != ESP_OK)
     {
     MyOTA.ClearFlashStatus();
-    writer->printf("Error: ESP32 error #%d finalising OTA operation - state is inconsistent\n",err);
+    ESP_LOGE(TAG, "FlashHTTP: ESP32 error #%d finalising OTA operation - state is inconsistent",err);
     free(buf);
-    return;
+    return false;
     }
 
   // All done
-  MyOTA.SetFlashStatus("OTA Flash HTTP: Setting boot partition...");
-  writer->puts(MyOTA.GetFlashStatus());
+  MyOTA.SetFlashStatus("OTA Flash HTTP: Setting boot partition...", 0, true);
   err = esp_ota_set_boot_partition(target);
   MyOTA.ClearFlashStatus();
   if (err != ESP_OK)
     {
-    writer->printf("Error: ESP32 error #%d setting boot partition - check before rebooting\n",err);
+    ESP_LOGE(TAG, "FlashHTTP: ESP32 error #%d setting boot partition - check before rebooting",err);
     free(buf);
-    return;
+    return false;
     }
   
   MyNotify.NotifyString("info", "ota.update", "Flashed new firmware version finished");
-  writer->printf("OTA flash was successful\n  Flashed %d bytes from %s\n  Next boot will be from '%s'\n",
+  ESP_LOGI(TAG, "FlashHTTP: OTA flash was successful. Flashed %d bytes from %s. Next boot: '%s'",
                  expected,url.c_str(),target->label);
   MyConfig.SetParamValue("ota", "http.mru", url);
   free(buf);
+  return true;
   }
 
 void ota_flash_auto(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, const char* const* argv)
@@ -488,7 +507,7 @@ void ota_flash_auto(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int arg
   bool force = (strcmp(cmd->GetName(), "force")==0);
 
   writer->puts("Triggering automatic firmware update...");
-  MyOTA.LaunchAutoFlash(force ? OTA_FlashCfg_Force : OTA_FlashCfg_Default);
+  MyOTA.LaunchAutoFlash(force ? OTA_FlashCfg_Force : OTA_FlashCfg_Default, "");
   }
 
 void ota_boot(int verbosity, OvmsWriter* writer, OvmsCommand* cmd, int argc, const char* const* argv)
@@ -713,7 +732,7 @@ void OvmsOTA::CheckFlashSD(std::string event, void* data)
   {
   if (path_exists("/sd/ovms3.bin"))
     {
-    LaunchAutoFlash(OTA_FlashCfg_FromSD);
+    LaunchAutoFlash(OTA_FlashCfg_FromSD, "");
     }
   }
 
@@ -1007,6 +1026,7 @@ OvmsOTA::OvmsOTA()
   OvmsCommand* cmd_otaflash = cmd_ota->RegisterCommand("flash","OTA flash");
   cmd_otaflash->RegisterCommand("vfs","OTA flash vfs",ota_flash_vfs,"<file>",1,1, true, vfs_file_validate);
   cmd_otaflash->RegisterCommand("http","OTA flash http",ota_flash_http,"[<url>]",0,1);
+  cmd_otaflash->RegisterCommand("status","Show flash progress",ota_flash_status);
   OvmsCommand* cmd_otaflash_auto = cmd_otaflash->RegisterCommand("auto","Automatic regular OTA flash (over web)",ota_flash_auto);
   cmd_otaflash_auto->RegisterCommand("force","…force update (even if server version older)",ota_flash_auto);
 
@@ -1114,7 +1134,7 @@ void OvmsOTA::Ticker600(std::string event, void* data)
       (tmu.tm_mday != m_lastcheckday))
     {
     m_lastcheckday = tmu.tm_mday;  // So we only try once a day (unless cleared due to a temporary fault)
-    LaunchAutoFlash(OTA_FlashCfg_Default);
+    LaunchAutoFlash(OTA_FlashCfg_Default, "");
     }
   }
 
@@ -1156,35 +1176,66 @@ int OvmsOTA::GetFlashPerc()
 
 static void OTAFlashTask(void *pvParameters)
   {
-  ota_flashcfg_t cfg = (ota_flashcfg_t)((uint32_t)pvParameters);
+  ota_flash_params_t* params = (ota_flash_params_t*)pvParameters;
+  ota_flashcfg_t cfg = params->cfg;
+  std::string url = params->url;
   bool force  = (cfg == OTA_FlashCfg_Force);
   bool fromsd = (cfg == OTA_FlashCfg_FromSD);
-  bool success;
+  bool success = false;
 
   ESP_LOGI(TAG, "AutoFlash %s: Task is running%s", (fromsd)?"SD":"OTA", (force)?" forced":"");
 
-  if (fromsd)
+  delete params;
+
+  switch (cfg)
     {
+    case OTA_FlashCfg_Default:
+      ESP_LOGI(TAG, "OTAFlashTask: Auto OTA update");
+      success = MyOTA.AutoFlash(false);
+      break;
+    case OTA_FlashCfg_Force:
+      ESP_LOGI(TAG, "OTAFlashTask: Forced OTA update");
+      success = MyOTA.AutoFlash(true);
+      break;
+    case OTA_FlashCfg_FromSD:
 #ifdef CONFIG_OVMS_COMP_SDCARD
-    success = MyOTA.AutoFlashSD();
+      ESP_LOGI(TAG, "OTAFlashTask: Flash from SD card");
+      success = MyOTA.AutoFlashSD();
 #else
-    success = false;
+      ESP_LOGE(TAG, "OTAFlashTask: SD card support not compiled in");
+      success = false;
 #endif //CONFIG_OVMS_COMP_SDCARD
-    }
-  else
-    {
-    success = MyOTA.AutoFlash(force);
+      break;
+    case OTA_FlashCfg_HTTP:
+      ESP_LOGI(TAG, "OTAFlashTask: HTTP flash from %s", url.c_str());
+      success = MyOTA.FlashHTTP(url);
+      break;
+    default:
+      ESP_LOGE(TAG, "OTAFlashTask: Invalid flash configuration");
+      success = false;
+      break;
     }
 
   if (success)
     {
     // Flash has completed. We now need to reboot
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    if (cfg == OTA_FlashCfg_HTTP)
+      MyOTA.SetFlashStatus("HTTP Flash complete...", 100);
+    else
+      MyOTA.SetFlashStatus("Flash complete, rebooting...", 100);
 
+    vTaskDelay(pdMS_TO_TICKS(5000));
     // All done. Let's restart...
     ESP_LOGI(TAG, "AutoFlash %s: Task complete. Requesting restart...", (fromsd)?"SD":"OTA");
-    MyBoot.Restart();
+
+    if (cfg != OTA_FlashCfg_HTTP)
+      MyBoot.Restart();
+
     MyBoot.SetFirmwareUpdate();
+    }
+  else
+    {
+    MyOTA.SetFlashStatus("Flash failed", 0);
     }
 
   MyOTA.m_autotask = NULL;
@@ -1193,7 +1244,7 @@ static void OTAFlashTask(void *pvParameters)
   vTaskDelete(NULL);
   }
 
-void OvmsOTA::LaunchAutoFlash(ota_flashcfg_t cfg /*=OTA_FlashCfg_Default*/)
+void OvmsOTA::LaunchAutoFlash(ota_flashcfg_t cfg /*=OTA_FlashCfg_Default*/, const std::string& url /*=""*/)
   {
   if (m_autotask != NULL)
     {
@@ -1201,8 +1252,11 @@ void OvmsOTA::LaunchAutoFlash(ota_flashcfg_t cfg /*=OTA_FlashCfg_Default*/)
     return;
     }
 
+  ota_flash_params_t* params = new ota_flash_params_t();
+  params->cfg = cfg;
+  params->url = url;
   xTaskCreatePinnedToCore(OTAFlashTask, "OVMS AutoFlash",
-    TASK_STACK_SIZE, (void*)cfg, 5, &m_autotask, CORE(1));
+    TASK_STACK_SIZE, (void*)params, 5, &m_autotask, CORE(1));
   }
 
 bool OvmsOTA::AutoFlash(bool force)
